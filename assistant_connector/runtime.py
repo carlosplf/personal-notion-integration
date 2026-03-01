@@ -13,6 +13,37 @@ from assistant_connector.tool_registry import ToolRegistry
 
 
 class AssistantRuntime:
+    _TOOLS_REQUIRING_OK_CONFIRMATION = {
+        "send_email",
+        "create_notion_note",
+        "create_notion_task",
+    }
+    _CLEAR_CONFIRMATION_MESSAGES = {
+        "ok",
+        "sim",
+        "confirmo",
+        "confirmado",
+        "autorizo",
+        "autorizado",
+        "pode",
+        "pode enviar",
+        "pode criar",
+        "pode prosseguir",
+        "pode seguir",
+        "pode submeter",
+        "pode executar",
+        "manda",
+        "manda ver",
+        "segue",
+        "prosseguir",
+        "go ahead",
+        "yes",
+        "confirmed",
+        "approved",
+        "approve",
+    }
+    _NEGATION_TOKENS = {"nao", "não", "not", "cancelar", "cancela", "cancel", "pare", "stop"}
+
     def __init__(
         self,
         *,
@@ -220,6 +251,16 @@ class AssistantRuntime:
                     "Peça confirmação explícita do usuário e use confirmed=true."
                 ),
             }
+        if tool_name in self._TOOLS_REQUIRING_OK_CONFIRMATION and not self._has_recent_ok_confirmation(
+            context.session_id
+        ):
+            return {
+                "error": "ok_confirmation_required",
+                "message": (
+                    "Antes de submeter esta ação, peça confirmação explícita do usuário "
+                    "e só prossiga quando a mensagem mais recente confirmar claramente a ação."
+                ),
+            }
         try:
             return self._tool_registry.execute_tool(tool_name, arguments, context)
         except Exception as error:
@@ -229,6 +270,22 @@ class AssistantRuntime:
                 "tool_name": tool_name,
                 "details": str(error),
             }
+
+    def _has_recent_ok_confirmation(self, session_id: str) -> bool:
+        history = self._memory_store.get_recent_messages(session_id=session_id, limit=6)
+        for message in reversed(history):
+            if message.get("role") != "user":
+                continue
+            return self._is_clear_confirmation_message(str(message.get("content", "")))
+        return False
+
+    def _is_clear_confirmation_message(self, content: str) -> bool:
+        normalized = str(content).strip().lower()
+        compact = re.sub(r"\s+", " ", normalized)
+        words = set(re.findall(r"[a-z0-9à-ÿ]+", compact))
+        if words & self._NEGATION_TOKENS:
+            return False
+        return compact in self._CLEAR_CONFIRMATION_MESSAGES
 
     def _extract_function_calls(self, response) -> list[dict[str, str]]:
         output_items = self._item_get(response, "output", []) or []

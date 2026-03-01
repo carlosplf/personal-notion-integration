@@ -334,6 +334,110 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(answer, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
+    def test_runtime_blocks_sensitive_write_tool_without_user_ok(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "send_email",
+                        "arguments": "{\"confirmed\":true}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Confirmação ok necessária.",
+            },
+        ]
+        tool_definitions = {
+            "send_email": ToolDefinition(
+                name="send_email",
+                description="Envia email",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["send_email"],
+            )
+
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="envia agora",
+            )
+
+        self.assertEqual(answer, "Confirmação ok necessária.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
+        self.assertIn("ok_confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
+
+    def test_runtime_executes_sensitive_write_tool_after_clear_confirmation(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "create_notion_task",
+                        "arguments": "{\"task_name\":\"Nova tarefa\",\"confirmed\":true}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Tarefa criada.",
+            },
+        ]
+        tool_definitions = {
+            "create_notion_task": ToolDefinition(
+                name="create_notion_task",
+                description="Cria tarefa",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["create_notion_task"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="pode enviar",
+            )
+
+        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
+
     def test_runtime_handles_invalid_tool_arguments_json(self):
         payloads = [
             {
