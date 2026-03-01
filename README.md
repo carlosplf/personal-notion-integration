@@ -123,6 +123,7 @@ python run.py
 ### Conversational mode via DM
 
 - You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
+- In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
 - DM audio attachments are transcribed and processed by the same assistant flow.
 - In conversational mode, the assistant can use tools for Notion tasks/notes, calendar, email (with explicit confirmation for write actions), and tech news (`list_tech_news`).
 

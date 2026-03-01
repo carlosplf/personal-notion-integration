@@ -293,6 +293,11 @@ def build_new_chat_response():
     return "## Nova conversa iniciada\n\nPronto. Limpei o histórico deste chat e vou responder sem contexto anterior."
 
 
+def _is_dm_reset_shortcut(text):
+    normalized = str(text or "").strip().lower()
+    return normalized in {"/reset", "/new_chat"}
+
+
 def create_discord_client(project_logger=None):
     logger = project_logger or create_logger.create_logger()
     intents = discord.Intents.default()
@@ -608,6 +613,20 @@ def create_discord_client(project_logger=None):
                 await message.channel.send(build_error_response(error))
                 return
         if not input_text:
+            return
+        if _is_dm_reset_shortcut(input_text):
+            try:
+                service = get_assistant_service()
+                await asyncio.to_thread(
+                    service.reset_chat,
+                    user_id=str(message.author.id),
+                    channel_id=str(message.channel.id),
+                    guild_id=None,
+                )
+                await message.channel.send(build_new_chat_response())
+            except Exception as error:
+                logger.exception("Error running DM reset shortcut")
+                await message.channel.send(build_error_response(error))
             return
 
         try:

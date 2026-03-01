@@ -162,6 +162,14 @@ class TestDiscordBot(unittest.TestCase):
         self.assertIn("Nova conversa iniciada", message)
         self.assertIn("Limpei o histórico", message)
 
+    def test_is_dm_reset_shortcut_accepts_reset_and_new_chat(self):
+        self.assertTrue(discord_bot._is_dm_reset_shortcut("/reset"))
+        self.assertTrue(discord_bot._is_dm_reset_shortcut(" /new_chat "))
+
+    def test_is_dm_reset_shortcut_rejects_other_messages(self):
+        self.assertFalse(discord_bot._is_dm_reset_shortcut("reset"))
+        self.assertFalse(discord_bot._is_dm_reset_shortcut("/reset agora"))
+
     def test_filter_tasks_for_today(self):
         today = datetime.date.today().isoformat()
         tasks = [
