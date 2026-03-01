@@ -79,7 +79,7 @@ EMAIL_ASSISTANT_SUBJECT_PREFIX="[Assistant]"                 # optional subject 
 LOG_PATH="."
 DISCORD_BOT_TOKEN="your_bot_token_here"
 DISCORD_GUILD_ID="123456789012345678" # optional, faster slash-command sync
-DISCORD_ALLOWED_USER_ID="123456789012345678" # optional, restrict all bot usage (slash + DM) to a single Discord user ID
+DISCORD_ALLOWED_USER_ID="123456789012345678" # required for private operation; only this user can access slash + DM
 API_DAYS_TO_CONSIDER="0"               # optional, includes overdue + next N days
 ASSISTANT_AGENT_ID="personal_assistant" # optional, agent id loaded from JSON config
 ASSISTANT_MEMORY_PATH="./assistant_memory.sqlite3" # optional, SQLite file for persistent chat memory
@@ -89,11 +89,13 @@ ASSISTANT_MAX_STORED_MESSAGE_CHARS="4000" # optional, max chars per stored messa
 ASSISTANT_MAX_STORED_TOOL_PAYLOAD_CHARS="12000" # optional, max chars per stored tool payload
 ASSISTANT_MAX_HISTORY_CHARS="12000" # optional, max history chars sent to the LLM per request
 ASSISTANT_MAX_TOOL_OUTPUT_CHARS="8000" # optional, max tool output chars sent back to the LLM
+AUDIO_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe" # optional, model used to transcribe DM audio attachments
 ```
 
 Notes:
 - `DISCORD_BOT_TOKEN` is required to run the assistant.
-- Set `DISCORD_ALLOWED_USER_ID` to lock the bot to your own Discord user ID.
+- `DISCORD_ALLOWED_USER_ID` should be set to your Discord user ID for private operation.
+- If `DISCORD_ALLOWED_USER_ID` is empty, access is denied by default (fail-closed behavior).
 - Notion vars are required for Notion-related task and notes flows.
 - To send email through `/bot`, keep Gmail OAuth configured (`credentials.json` + `token.json`) and set `EMAIL_ASSISTANT_*` fields.
 - In `/bot`, the `send_email` tool requires an explicit recipient in the user message; the subject is defined by the LLM.
@@ -106,20 +108,23 @@ python run.py
 
 ## Discord commands (current)
 
-- `/tasks` → fetches tasks and returns a prioritized markdown summary.
-- `/note` → opens a multiline modal and creates a note in the Notion Notes database with today's date and an inferred thematic tag.
-- `/notes` → lists notes from 5 days back to 5 days ahead.
-- `/day` → sends an organized Markdown view with detailed items for today (Notion tasks + today's calendar events).
-- `/tomorrow` → sends an organized Markdown view with detailed items for tomorrow (Notion tasks + calendar events).
-- `/week` → sends a concise Markdown summary for the current week (Sunday to Saturday), focusing on priorities and key agenda blocks.
-- `/add_task <text>` → parses natural language and creates a task in Notion.
-- `/calendar` → summarizes your next 7 days from Google Calendar.
-- `/add_event <text>` → parses natural language and creates a calendar event.
-- `/bot <text>` → starts a conversational assistant flow with tool-calling and persistent memory.
-- `/pa <text>` → alias of `/bot` with the same conversational assistant behavior.
-  - Through `/bot`, the agent can also send emails using the `send_email` tool (with explicit confirmation).
-  - Through `/bot`, the agent can create and list Notion notes via tools (`create_notion_note`, `list_notion_notes`), including rich, detailed note content.
-- Direct Messages (DM) to the bot also use the same assistant flow as `/bot` and `/pa`.
+- `/tasks` - Fetch tasks and return a prioritized Markdown summary.
+- `/add_task <text>` - Parse natural language and create a Notion task.
+- `/note` - Open a multiline modal and create a note in Notion Notes.
+- `/notes` - List notes from 5 days back to 5 days ahead.
+- `/calendar` - Summarize the next 7 days from Google Calendar.
+- `/add_event <text>` - Parse natural language and create a calendar event.
+- `/day` - Detailed summary for today (tasks + events).
+- `/tomorrow` - Detailed summary for tomorrow (tasks + events).
+- `/week` - Concise summary for the current week (Sunday to Saturday).
+- `/bot <text>` - Conversational assistant with tool-calling + persistent memory.
+- `/pa <text>` - Alias of `/bot`.
+
+### Conversational mode via DM
+
+- You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
+- DM audio attachments are transcribed and processed by the same assistant flow.
+- In conversational mode, the assistant can use tools for Notion tasks/notes, calendar, email (with explicit confirmation for write actions), and tech news (`list_tech_news`).
 
 ## Run as Ubuntu service (systemd)
 

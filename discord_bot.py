@@ -16,6 +16,16 @@ MAX_DISCORD_MESSAGE_LENGTH = 2000
 ACCESS_DENIED_MESSAGE = (
     "🔒 Access denied: this assistant is restricted to an authorized Discord user."
 )
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".ogg",
+    ".oga",
+    ".webm",
+    ".mp4",
+    ".mpeg",
+}
 
 
 def _truncate_text(text, limit):
@@ -111,6 +121,21 @@ def _is_authorized_discord_user(user_id, allowed_user_id):
     if not allowed:
         return False
     return str(user_id) == allowed
+
+
+def _is_audio_attachment(attachment):
+    content_type = str(getattr(attachment, "content_type", "") or "").lower()
+    if content_type.startswith("audio/"):
+        return True
+    filename = str(getattr(attachment, "filename", "") or "").lower()
+    return any(filename.endswith(extension) for extension in SUPPORTED_AUDIO_EXTENSIONS)
+
+
+def _select_audio_attachment(attachments):
+    for attachment in attachments or []:
+        if _is_audio_attachment(attachment):
+            return attachment
+    return None
 
 
 def build_note_payload_from_input(input_text, project_logger):
@@ -527,6 +552,22 @@ def create_discord_client(project_logger=None):
             return
 
         input_text = str(getattr(message, "content", "")).strip()
+        audio_attachment = _select_audio_attachment(getattr(message, "attachments", []))
+        if not input_text and audio_attachment:
+            try:
+                async with message.channel.typing():
+                    audio_bytes = await audio_attachment.read(use_cached=True)
+                    input_text = await asyncio.to_thread(
+                        llm_api.transcribe_audio_input,
+                        audio_bytes,
+                        getattr(audio_attachment, "filename", "dm_audio"),
+                        getattr(audio_attachment, "content_type", ""),
+                        logger,
+                    )
+            except Exception as error:
+                logger.exception("Error transcribing DM audio")
+                await message.channel.send(build_error_response(error))
+                return
         if not input_text:
             return
 

@@ -125,6 +125,23 @@ class TestDiscordBot(unittest.TestCase):
     def test_access_denied_message_is_defined(self):
         self.assertIn("Access denied", discord_bot.ACCESS_DENIED_MESSAGE)
 
+    def test_is_audio_attachment_detects_content_type(self):
+        attachment = types.SimpleNamespace(content_type="audio/ogg", filename="voice-message")
+        self.assertTrue(discord_bot._is_audio_attachment(attachment))
+
+    def test_is_audio_attachment_detects_extension(self):
+        attachment = types.SimpleNamespace(content_type=None, filename="voice.ogg")
+        self.assertTrue(discord_bot._is_audio_attachment(attachment))
+
+    def test_select_audio_attachment_returns_first_audio(self):
+        attachments = [
+            types.SimpleNamespace(content_type="image/png", filename="image.png"),
+            types.SimpleNamespace(content_type="", filename="voice.ogg"),
+            types.SimpleNamespace(content_type="audio/wav", filename="voice2.wav"),
+        ]
+        selected = discord_bot._select_audio_attachment(attachments)
+        self.assertEqual(selected.filename, "voice.ogg")
+
     def test_build_bot_response_truncates_long_text(self):
         message = discord_bot.build_bot_response("b" * 5000)
         self.assertLessEqual(len(message), discord_bot.MAX_DISCORD_MESSAGE_LENGTH)

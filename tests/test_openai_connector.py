@@ -26,8 +26,19 @@ class _FakeResponsesAPI:
 
 
 class _FakeOpenAIClient:
-    def __init__(self, output_text):
+    def __init__(self, output_text, transcript_text="transcript"):
         self.responses = _FakeResponsesAPI(output_text)
+        self.audio = types.SimpleNamespace(
+            transcriptions=types.SimpleNamespace(
+                calls=[],
+                create=self._create_transcription,
+            )
+        )
+        self._transcript_text = transcript_text
+
+    def _create_transcription(self, **kwargs):
+        self.audio.transcriptions.calls.append(kwargs)
+        return types.SimpleNamespace(text=self._transcript_text)
 
 
 class TestOpenAIConnector(unittest.TestCase):
@@ -161,6 +172,32 @@ class TestOpenAIConnector(unittest.TestCase):
 
         self.assertEqual(parsed["note_name"], "Ideia")
         self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_transcribe_audio_input_uses_transcribe_model_from_env(self):
+        fake_client = _FakeOpenAIClient("unused", transcript_text="texto transcrito")
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"AUDIO_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe"}, clear=False
+        ):
+            transcript = llm_api.transcribe_audio_input(
+                b"fake-audio-bytes",
+                "audio.ogg",
+                "audio/ogg",
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
+        self.assertEqual(transcript, "texto transcrito")
+        self.assertEqual(fake_client.audio.transcriptions.calls[0]["model"], "gpt-4o-mini-transcribe")
+        file_payload = fake_client.audio.transcriptions.calls[0]["file"]
+        self.assertIsInstance(file_payload, tuple)
+        self.assertEqual(file_payload[0], "audio.ogg")
+
+    def test_transcribe_audio_input_rejects_empty_audio(self):
+        with self.assertRaises(ValueError):
+            llm_api.transcribe_audio_input(
+                b"",
+                "audio.ogg",
+                "audio/ogg",
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
 
     def test_summarize_calendar_events_uses_llm_model_from_env(self):
         fake_client = _FakeOpenAIClient("Resumo da agenda")

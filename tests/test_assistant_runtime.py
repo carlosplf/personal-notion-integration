@@ -65,6 +65,8 @@ class TestAssistantRuntime(unittest.TestCase):
         memory_window=20,
         max_history_chars=12000,
         max_tool_output_chars=8000,
+        agent_memory_text="",
+        user_memories=None,
     ):
         return AssistantRuntime(
             agent=AgentDefinition(
@@ -82,6 +84,8 @@ class TestAssistantRuntime(unittest.TestCase):
             available_agents=[{"id": "personal_assistant", "description": "assistant", "model": "gpt-4.1-mini"}],
             max_history_chars=max_history_chars,
             max_tool_output_chars=max_tool_output_chars,
+            agent_memory_text=agent_memory_text,
+            user_memories=user_memories,
             openai_client=_FakeOpenAIClient(payloads),
         )
 
@@ -164,6 +168,40 @@ class TestAssistantRuntime(unittest.TestCase):
             )
 
         self.assertEqual(answer, "Resposta direta")
+
+    def test_runtime_injects_agent_and_user_memories(self):
+        payloads = [{"id": "resp-1", "output": [], "output_text": "Resposta direta"}]
+        tool_definitions = {
+            "list_available_tools": ToolDefinition(
+                name="list_available_tools",
+                description="Lista tools",
+                input_schema={"type": "object", "properties": {}},
+                handler="assistant_connector.tools.meta_tools:list_available_tools",
+                write_operation=False,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["list_available_tools"],
+                agent_memory_text="agent-memory-style",
+                user_memories={"about-me.md": "Usuário focado em trabalho e família"},
+            )
+            runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="Me lembre das prioridades da família",
+            )
+
+        first_call_input = runtime._openai_client.responses.calls[0]["input"]
+        system_messages = [msg["content"] for msg in first_call_input if msg["role"] == "system"]
+        self.assertTrue(any("agent-memory-style" in content for content in system_messages))
+        self.assertTrue(any("família" in content for content in system_messages))
 
     def test_runtime_rejects_empty_message(self):
         tool_definitions = {

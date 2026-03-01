@@ -14,6 +14,7 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("list_calendar_events", agent.tools)
         self.assertIn("list_notion_notes", agent.tools)
         self.assertIn("create_notion_note", agent.tools)
+        self.assertIn("list_tech_news", agent.tools)
 
     def test_write_tools_flagged_as_write_operations(self):
         configuration = load_assistant_configuration()

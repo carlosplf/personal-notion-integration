@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from dotenv import load_dotenv
@@ -22,6 +23,9 @@ class AssistantRuntime:
         available_agents: list[dict[str, str]],
         max_history_chars: int = 12000,
         max_tool_output_chars: int = 8000,
+        agent_memory_text: str = "",
+        user_memories: dict[str, str] | None = None,
+        max_user_memory_chars: int = 3000,
         openai_client=None,
     ):
         self._agent = agent
@@ -31,6 +35,13 @@ class AssistantRuntime:
         self._available_agents = available_agents
         self._max_history_chars = max(1000, int(max_history_chars))
         self._max_tool_output_chars = max(1000, int(max_tool_output_chars))
+        self._agent_memory_text = str(agent_memory_text or "").strip()
+        self._user_memories = {
+            key: str(value).strip()
+            for key, value in (user_memories or {}).items()
+            if str(value).strip()
+        }
+        self._max_user_memory_chars = max(500, int(max_user_memory_chars))
         self._openai_client = openai_client or self._create_openai_client()
 
     def process_user_message(
@@ -67,7 +78,7 @@ class AssistantRuntime:
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(
             model=self._agent.model,
-            input=self._build_input_messages(history, available_tools),
+            input=self._build_input_messages(history, available_tools, clean_message),
             tools=openai_tools,
         )
 
@@ -125,6 +136,7 @@ class AssistantRuntime:
         self,
         history: list[dict[str, str]],
         available_tools: list[dict[str, Any]],
+        user_message: str,
     ) -> list[dict[str, str]]:
         tools_lines = "\n".join(
             f"- {tool['name']}: {tool['description']}" for tool in available_tools
@@ -141,10 +153,57 @@ class AssistantRuntime:
             "- Nunca responda em JSON bruto.\n\n"
             f"{self._build_email_style_guidance()}"
         )
-        return [{"role": "system", "content": system_message}] + [
+        if self._agent_memory_text:
+            system_message = (
+                f"{system_message}\n\n"
+                "Memória persistente do agente (estilo, tom e prioridades operacionais):\n"
+                f"{self._truncate_text(self._agent_memory_text, 2000)}"
+            )
+
+        messages = [{"role": "system", "content": system_message}]
+        user_memory_context = self._select_user_memory_context(user_message)
+        if user_memory_context:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Contexto persistente do usuário (use somente quando for relevante para a solicitação):\n"
+                        f"{user_memory_context}"
+                    ),
+                }
+            )
+        return messages + [
             {"role": message["role"], "content": message["content"]}
             for message in history
         ]
+
+    def _select_user_memory_context(self, user_message: str) -> str:
+        if not self._user_memories:
+            return ""
+
+        query = str(user_message or "").lower()
+        tokens = set(re.findall(r"[a-z0-9à-ÿ_]{3,}", query))
+        scored = []
+        for file_name, content in self._user_memories.items():
+            sample = f"{file_name.lower()} {content[:1200].lower()}"
+            score = 0
+            if file_name.lower() in ("about-me.md", "about_me.md", "about-user.md", "about_user.md"):
+                score += 1
+            score += sum(1 for token in tokens if token in sample)
+            if score > 0:
+                scored.append((score, file_name, content))
+
+        if not scored:
+            first_name = next(iter(self._user_memories))
+            scored = [(1, first_name, self._user_memories[first_name])]
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        selected = scored[:2]
+        chunks = [
+            f"### {file_name}\n{self._truncate_text(content, 1400)}"
+            for _, file_name, content in selected
+        ]
+        return self._truncate_text("\n\n".join(chunks), self._max_user_memory_chars)
 
     def _execute_tool_call(
         self,

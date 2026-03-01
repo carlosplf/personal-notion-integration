@@ -209,6 +209,38 @@
       }
     },
     {
+      "name": "list_tech_news",
+      "description": "Busca notícias recentes de tecnologia em fontes públicas (RSS + Hacker News).",
+      "handler": "assistant_connector.tools.news_tools:list_tech_news",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "description": "Tema para filtrar notícias (ex.: tecnologia, IA, segurança, startups)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de notícias retornadas.",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "include_hacker_news": {
+            "type": "boolean",
+            "description": "Quando true, inclui itens do Hacker News."
+          },
+          "max_age_hours": {
+            "type": "integer",
+            "description": "Idade máxima das notícias em horas.",
+            "minimum": 6,
+            "maximum": 168
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "send_email",
       "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
       "handler": "assistant_connector.tools.email_tools:send_email",
@@ -257,7 +289,7 @@
       "model": "gpt-4.1-mini",
       "max_tool_rounds": 6,
       "memory_window": 20,
-      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
+      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
       "tools": [
         "list_available_tools",
         "list_available_agents",
@@ -267,6 +299,7 @@
         "create_notion_note",
         "list_calendar_events",
         "create_calendar_event",
+        "list_tech_news",
         "send_email"
       ]
     }

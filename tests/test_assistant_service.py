@@ -172,6 +172,52 @@ class TestAssistantService(unittest.TestCase):
         self.assertEqual(service._runtime._max_history_chars, 3200)
         self.assertEqual(service._runtime._max_tool_output_chars, 4200)
 
+    def test_create_assistant_service_loads_memories_from_files(self):
+        config = {
+            "tools": [
+                {
+                    "name": "list_available_tools",
+                    "description": "Lista tools",
+                    "handler": "assistant_connector.tools.meta_tools:list_available_tools",
+                    "write_operation": False,
+                    "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+                }
+            ],
+            "agents": [
+                {
+                    "id": "custom_agent",
+                    "description": "Agent de teste",
+                    "model": "legacy-model",
+                    "system_prompt": "Teste",
+                    "tools": ["list_available_tools"],
+                }
+            ],
+        }
+        payloads = [{"id": "resp-1", "output": [], "output_text": "Olá"}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agents.json")
+            memory_path = os.path.join(temp_dir, "memory.sqlite3")
+            memories_dir = os.path.join(temp_dir, "memories")
+            os.makedirs(memories_dir, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as config_file:
+                json.dump(config, config_file)
+            with open(os.path.join(memories_dir, "personal-assistant.md"), "w", encoding="utf-8") as memory_file:
+                memory_file.write("Agent memory style")
+            with open(os.path.join(memories_dir, "about-me.md"), "w", encoding="utf-8") as memory_file:
+                memory_file.write("User memory profile")
+
+            with patch.dict(os.environ, {"ASSISTANT_MEMORIES_DIR": memories_dir}, clear=False):
+                service = create_assistant_service(
+                    project_logger=_FakeLogger(),
+                    config_path=config_path,
+                    memory_path=memory_path,
+                    agent_id="custom_agent",
+                    openai_client=_FakeOpenAIClient(payloads),
+                )
+
+        self.assertIn("Agent memory style", service._runtime._agent_memory_text)
+        self.assertIn("about-me.md", service._runtime._user_memories)
+
 
 if __name__ == "__main__":
     unittest.main()

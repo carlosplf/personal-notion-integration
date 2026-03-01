@@ -3,7 +3,7 @@ import os
 from unittest.mock import patch
 
 from assistant_connector.models import AgentDefinition, ToolExecutionContext
-from assistant_connector.tools import calendar_tools, email_tools, meta_tools, notion_tools
+from assistant_connector.tools import calendar_tools, email_tools, meta_tools, news_tools, notion_tools
 
 
 class _FakeLogger:
@@ -32,6 +32,44 @@ def _build_context():
 
 
 class TestAssistantTools(unittest.TestCase):
+    @patch("assistant_connector.tools.news_tools.urlopen")
+    def test_list_tech_news_returns_rss_and_hn_items(self, mock_urlopen):
+        class _Response:
+            def __init__(self, content):
+                self._content = content
+
+            def read(self):
+                return self._content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        rss_payload = b"""<?xml version="1.0"?>
+        <rss><channel>
+          <item><title>AI launch</title><link>https://example.com/a</link><pubDate>Mon, 01 Mar 2026 20:00:00 GMT</pubDate><description>tech</description></item>
+        </channel></rss>"""
+        top_ids_payload = b"[1001]"
+        hn_item_payload = b'{"id":1001,"title":"Startup growth","url":"https://news.ycombinator.com/item?id=1001","time":1772409600}'
+        mock_urlopen.side_effect = [
+            _Response(rss_payload),
+            _Response(rss_payload),
+            _Response(rss_payload),
+            _Response(rss_payload),
+            _Response(top_ids_payload),
+            _Response(hn_item_payload),
+        ]
+
+        result = news_tools.list_tech_news(
+            {"topic": "startup", "limit": 3, "include_hacker_news": True, "max_age_hours": 999},
+            _build_context(),
+        )
+
+        self.assertEqual(result["returned"], 1)
+        self.assertTrue(any(item["source"] == "Hacker News" for item in result["news"]))
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_tasks_from_control_panel")
     def test_list_notion_tasks_clamps_inputs(self, mock_collect_tasks):
         mock_collect_tasks.return_value = [{"name": f"Task {i}"} for i in range(60)]

@@ -68,6 +68,18 @@ def create_assistant_service(
     max_tool_payload_chars = _get_env_int("ASSISTANT_MAX_STORED_TOOL_PAYLOAD_CHARS", 12000, minimum=500)
     max_history_chars = _get_env_int("ASSISTANT_MAX_HISTORY_CHARS", 12000, minimum=1000)
     max_tool_output_chars = _get_env_int("ASSISTANT_MAX_TOOL_OUTPUT_CHARS", 8000, minimum=1000)
+    max_user_memory_chars = _get_env_int("ASSISTANT_MAX_USER_MEMORY_CHARS", 3000, minimum=500)
+    memories_dir = os.getenv(
+        "ASSISTANT_MEMORIES_DIR",
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "memories")),
+    )
+    agent_memory_file = os.getenv("ASSISTANT_AGENT_MEMORY_FILE", "personal-assistant.md")
+    user_memory_file = os.getenv("ASSISTANT_USER_MEMORY_FILE", "about-me.md")
+    agent_memory_text, user_memories = _load_memories(
+        memories_dir=memories_dir,
+        agent_memory_file=agent_memory_file,
+        user_memory_file=user_memory_file,
+    )
 
     memory_store = ConversationMemoryStore(
         resolved_memory_path,
@@ -85,6 +97,9 @@ def create_assistant_service(
         available_agents=_build_agent_summaries(configuration.get_agent_summaries(), model_override),
         max_history_chars=max_history_chars,
         max_tool_output_chars=max_tool_output_chars,
+        agent_memory_text=agent_memory_text,
+        user_memories=user_memories,
+        max_user_memory_chars=max_user_memory_chars,
         openai_client=openai_client,
     )
     return AssistantService(runtime=runtime)
@@ -111,3 +126,38 @@ def _get_env_int(name: str, default: int, *, minimum: int) -> int:
     except ValueError:
         return default
     return max(parsed, minimum)
+
+
+def _load_memories(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
+    resolved_dir = str(memories_dir or "").strip()
+    if not resolved_dir or not os.path.isdir(resolved_dir):
+        return "", {}
+
+    files = sorted(
+        file_name
+        for file_name in os.listdir(resolved_dir)
+        if file_name.lower().endswith(".md")
+    )
+    agent_file_name = str(agent_memory_file or "personal-assistant.md").strip()
+    user_priority_file_name = str(user_memory_file or "about-me.md").strip()
+
+    agent_memory_text = ""
+    user_memories = {}
+    for file_name in files:
+        if file_name.lower() == "readme.md":
+            continue
+        full_path = os.path.join(resolved_dir, file_name)
+        with open(full_path, "r", encoding="utf-8") as memory_file:
+            content = memory_file.read().strip()
+        if not content:
+            continue
+        if file_name == agent_file_name:
+            agent_memory_text = content
+            continue
+        user_memories[file_name] = content
+
+    if user_priority_file_name in user_memories:
+        priority_content = user_memories.pop(user_priority_file_name)
+        user_memories = {user_priority_file_name: priority_content, **user_memories}
+
+    return agent_memory_text, user_memories

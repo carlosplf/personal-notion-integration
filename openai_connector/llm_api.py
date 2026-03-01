@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+DEFAULT_AUDIO_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 PROMPT_FILE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "openai_prompt.txt")
 )
@@ -82,6 +83,8 @@ CALENDAR_SUMMARY_PROMPT = (
     "\n- Linha com conflitos, blocos longos ou janela livre."
     "\nRegras:"
     "\n- Seja breve e útil."
+    "\n- Ao listar eventos, não inclua links automaticamente; mostre apenas nome, dia e horário."
+    "\n- Só inclua links ou detalhes extras de um evento quando o usuário pedir explicitamente."
     "\n- Se não houver eventos, responda exatamente: \"Sem eventos na agenda para os próximos 7 dias.\""
 )
 DAY_SUMMARY_PROMPT = (
@@ -167,6 +170,31 @@ def parse_add_note_input(user_input, project_logger):
         input=f"{NOTE_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
     )
     return parse_add_note_output(completion.output_text)
+
+
+def transcribe_audio_input(audio_bytes, filename, mime_type, project_logger):
+    if not audio_bytes:
+        raise ValueError("audio_bytes is required")
+
+    openai_client = _create_openai_client()
+    transcribe_model = _get_audio_transcribe_model()
+    safe_filename = str(filename or "audio_input.bin")
+    if "." not in safe_filename:
+        safe_filename = f"{safe_filename}.bin"
+    safe_mime_type = str(mime_type or "application/octet-stream").strip() or "application/octet-stream"
+
+    project_logger.info("Calling LLM to transcribe audio input...")
+    transcription = openai_client.audio.transcriptions.create(
+        model=transcribe_model,
+        file=(safe_filename, audio_bytes, safe_mime_type),
+    )
+
+    transcript_text = str(getattr(transcription, "text", "") or "").strip()
+    if not transcript_text and isinstance(transcription, dict):
+        transcript_text = str(transcription.get("text", "")).strip()
+    if not transcript_text:
+        raise ValueError("LLM returned empty audio transcription")
+    return transcript_text
 
 
 def summarize_day_context(today_tasks, today_events, project_logger):
@@ -476,3 +504,9 @@ def _get_llm_model():
     load_dotenv()
     llm_model = str(os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)).strip()
     return llm_model or DEFAULT_LLM_MODEL
+
+
+def _get_audio_transcribe_model():
+    load_dotenv()
+    transcribe_model = str(os.getenv("AUDIO_TRANSCRIBE_MODEL", DEFAULT_AUDIO_TRANSCRIBE_MODEL)).strip()
+    return transcribe_model or DEFAULT_AUDIO_TRANSCRIBE_MODEL
