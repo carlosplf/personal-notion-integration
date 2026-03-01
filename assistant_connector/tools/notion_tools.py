@@ -83,3 +83,59 @@ def create_notion_note(arguments, context):
         },
         project_logger=context.project_logger,
     )
+
+
+def edit_notion_item(arguments, context):
+    item_type = str(arguments.get("item_type", "")).strip().lower()
+    if item_type not in {"task", "card"}:
+        raise ValueError("item_type must be 'task' or 'card'")
+
+    page_id = str(arguments.get("page_id", "")).strip()
+    if not page_id:
+        raise ValueError("page_id is required")
+
+    payload = {
+        "item_type": item_type,
+        "page_id": page_id,
+    }
+    if item_type == "task":
+        if "task_name" in arguments:
+            task_name = str(arguments.get("task_name", "")).strip()
+            if not task_name:
+                raise ValueError("task_name cannot be empty")
+            payload["task_name"] = task_name
+        if "due_date" in arguments:
+            due_date = str(arguments.get("due_date", "")).strip()
+            datetime.date.fromisoformat(due_date)
+            payload["due_date"] = due_date
+        if "project" in arguments:
+            payload["project"] = str(arguments.get("project", "")).strip()
+        if "tags" in arguments:
+            tags = arguments.get("tags", [])
+            if not isinstance(tags, list):
+                raise ValueError("tags must be a list")
+            payload["tags"] = [str(tag).strip() for tag in tags if str(tag).strip()]
+        if "done" in arguments:
+            payload["done"] = bool(arguments.get("done"))
+        if set(payload.keys()) == {"item_type", "page_id"}:
+            raise ValueError("At least one task field is required")
+    else:
+        if "note_name" in arguments:
+            note_name = str(arguments.get("note_name", "")).strip()
+            if not note_name:
+                raise ValueError("note_name cannot be empty")
+            payload["note_name"] = note_name
+        if "tag" in arguments:
+            payload["tag"] = str(arguments.get("tag", "")).strip()
+        if "observations" in arguments:
+            payload["observations"] = str(arguments.get("observations", ""))
+        if "url" in arguments:
+            payload["url"] = str(arguments.get("url", "")).strip()
+        if "date" in arguments:
+            date_value = str(arguments.get("date", "")).strip()
+            datetime.date.fromisoformat(date_value)
+            payload["date"] = date_value
+        if set(payload.keys()) == {"item_type", "page_id"}:
+            raise ValueError("At least one card field is required")
+
+    return notion_connector.update_notion_page(payload, project_logger=context.project_logger)

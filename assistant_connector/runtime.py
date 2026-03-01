@@ -341,7 +341,9 @@ class AssistantRuntime:
             return (
                 "Preferências de email: use tom profissional, claro e cordial.\n"
                 "Ao usar send_email, defina o assunto você mesmo e só envie se o destinatário "
-                "tiver sido informado explicitamente pelo usuário."
+                "tiver sido informado explicitamente pelo usuário.\n"
+                "No corpo do email, seja estritamente fiel ao pedido do usuário: não adicione "
+                "contexto, justificativas, cumprimentos ou fechamento não solicitados."
             )
 
         lines = ["Preferências de email do usuário:"]
@@ -354,6 +356,10 @@ class AssistantRuntime:
         lines.append(
             "- Ao usar send_email, defina o assunto você mesmo e só envie se o destinatário "
             "tiver sido informado explicitamente pelo usuário."
+        )
+        lines.append(
+            "- No corpo do email, seja estritamente fiel ao pedido do usuário e não adicione "
+            "texto extra não solicitado."
         )
         return "\n".join(lines)
 

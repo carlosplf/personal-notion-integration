@@ -207,6 +207,158 @@ def create_task_in_control_panel(task_data, project_logger=None):
     raise RuntimeError("Failed to create task in Notion")
 
 
+def _find_property_name(properties, preferred_names, accepted_types):
+    for property_name in preferred_names:
+        metadata = properties.get(property_name, {})
+        if metadata.get("type") in accepted_types:
+            return property_name, metadata.get("type")
+    for property_name, metadata in properties.items():
+        if metadata.get("type") in accepted_types:
+            return property_name, metadata.get("type")
+    return None, None
+
+
+def update_notion_page(page_data, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+
+    item_type = str(page_data.get("item_type", "")).strip().lower()
+    if item_type not in {"task", "card"}:
+        raise ValueError("item_type must be 'task' or 'card'")
+
+    page_id = _normalize_notion_object_id(page_data.get("page_id"))
+    if not page_id:
+        raise ValueError("page_id is required")
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+        "Notion-Version": "2022-06-28",
+        "content-type": "application/json",
+    }
+    page_response = requests.get(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=headers,
+        timeout=30,
+    )
+    page_response.raise_for_status()
+    page_payload = page_response.json()
+    properties = page_payload.get("properties", {})
+    if not isinstance(properties, dict):
+        raise RuntimeError("Invalid Notion page properties payload")
+
+    updates = {}
+    updated_fields = []
+
+    if item_type == "task":
+        if "task_name" in page_data:
+            title_property, _ = _find_property_name(properties, ("Task", "Name"), {"title"})
+            if not title_property:
+                raise ValueError("Task title property not found in Notion page")
+            task_name = str(page_data.get("task_name", "")).strip()
+            updates[title_property] = {"title": [{"text": {"content": task_name}}]}
+            updated_fields.append("task_name")
+
+        if "due_date" in page_data:
+            date_property, _ = _find_property_name(properties, ("When", "Deadline"), {"date"})
+            if not date_property:
+                raise ValueError("Task date property not found in Notion page")
+            updates[date_property] = {"date": {"start": page_data.get("due_date")}}
+            updated_fields.append("due_date")
+
+        if "project" in page_data:
+            project_property, _ = _find_property_name(properties, ("Project",), {"select"})
+            if not project_property:
+                raise ValueError("Task project property not found in Notion page")
+            project_name = str(page_data.get("project", "")).strip()
+            updates[project_property] = {"select": {"name": project_name} if project_name else None}
+            updated_fields.append("project")
+
+        if "tags" in page_data:
+            tags_property, tags_type = _find_property_name(properties, ("Tags",), {"multi_select", "select"})
+            if not tags_property:
+                raise ValueError("Task tags property not found in Notion page")
+            tag_names = [str(tag).strip() for tag in page_data.get("tags", []) if str(tag).strip()]
+            if tags_type == "multi_select":
+                updates[tags_property] = {"multi_select": [{"name": tag} for tag in tag_names]}
+            else:
+                updates[tags_property] = {"select": {"name": tag_names[0]} if tag_names else None}
+            updated_fields.append("tags")
+
+        if "done" in page_data:
+            done_property, _ = _find_property_name(properties, ("DONE",), {"checkbox"})
+            if not done_property:
+                raise ValueError("Task checkbox property not found in Notion page")
+            updates[done_property] = {"checkbox": bool(page_data.get("done"))}
+            updated_fields.append("done")
+
+    if item_type == "card":
+        if "note_name" in page_data:
+            title_property, _ = _find_property_name(properties, ("Name", "Type"), {"title"})
+            if not title_property:
+                raise ValueError("Card title property not found in Notion page")
+            note_name = str(page_data.get("note_name", "")).strip()
+            updates[title_property] = {"title": [{"text": {"content": note_name}}]}
+            updated_fields.append("note_name")
+
+        if "tag" in page_data:
+            tag_property, tag_type = _find_property_name(properties, ("Tags", "Type"), {"multi_select", "select"})
+            if not tag_property:
+                raise ValueError("Card tag property not found in Notion page")
+            tag_name = str(page_data.get("tag", "")).strip()
+            if tag_type == "multi_select":
+                updates[tag_property] = {"multi_select": [{"name": tag_name}] if tag_name else []}
+            else:
+                updates[tag_property] = {"select": {"name": tag_name} if tag_name else None}
+            updated_fields.append("tag")
+
+        if "observations" in page_data:
+            observations_property, _ = _find_property_name(
+                properties,
+                ("Observações", "Observacoes", "Observations"),
+                {"rich_text"},
+            )
+            if not observations_property:
+                raise ValueError("Card observations property not found in Notion page")
+            updates[observations_property] = {
+                "rich_text": _build_notion_rich_text_chunks(str(page_data.get("observations", ""))),
+            }
+            updated_fields.append("observations")
+
+        if "url" in page_data:
+            url_property, _ = _find_property_name(properties, ("URL",), {"url"})
+            if not url_property:
+                raise ValueError("Card url property not found in Notion page")
+            external_url = str(page_data.get("url", "")).strip()
+            updates[url_property] = {"url": external_url or None}
+            updated_fields.append("url")
+
+        if "date" in page_data:
+            date_property, _ = _find_property_name(properties, ("Date", "Created"), {"date"})
+            if not date_property:
+                raise ValueError("Card date property not found in Notion page")
+            updates[date_property] = {"date": {"start": page_data.get("date")}}
+            updated_fields.append("date")
+
+    if not updates:
+        raise ValueError("No fields to update")
+
+    response = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        json={"properties": updates},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    result = response.json()
+    return {
+        "id": result.get("id"),
+        "page_url": result.get("url"),
+        "item_type": item_type,
+        "updated_fields": updated_fields,
+    }
+
+
 def _get_notes_database_id(project_logger):
     raw_notes_database_id = str(os.getenv("NOTION_NOTES_DB_ID", "")).strip()
     if raw_notes_database_id:

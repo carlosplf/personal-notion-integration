@@ -150,6 +150,81 @@
       }
     },
     {
+      "name": "edit_notion_item",
+      "description": "Edita uma tarefa (task) ou card no Notion usando o ID da página.",
+      "handler": "assistant_connector.tools.notion_tools:edit_notion_item",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "item_type": {
+            "type": "string",
+            "description": "Tipo do item a editar: task ou card.",
+            "enum": [
+              "task",
+              "card"
+            ]
+          },
+          "page_id": {
+            "type": "string",
+            "description": "ID da página do Notion (aceita ID ou URL da página)."
+          },
+          "task_name": {
+            "type": "string",
+            "description": "Novo nome da tarefa (item_type=task)."
+          },
+          "due_date": {
+            "type": "string",
+            "description": "Nova data da tarefa no formato YYYY-MM-DD (item_type=task)."
+          },
+          "project": {
+            "type": "string",
+            "description": "Novo projeto da tarefa (item_type=task)."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Nova lista de tags da tarefa (item_type=task)."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Marca tarefa como concluída/pendente (item_type=task)."
+          },
+          "note_name": {
+            "type": "string",
+            "description": "Novo título do card (item_type=card)."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Nova tag do card (item_type=card)."
+          },
+          "observations": {
+            "type": "string",
+            "description": "Novo conteúdo textual do card (item_type=card)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Nova URL relacionada ao card (item_type=card)."
+          },
+          "date": {
+            "type": "string",
+            "description": "Nova data do card no formato YYYY-MM-DD (item_type=card)."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "item_type",
+          "page_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "list_calendar_events",
       "description": "Lista eventos da agenda para os próximos 7 dias.",
       "handler": "assistant_connector.tools.calendar_tools:list_calendar_events",
@@ -289,7 +364,7 @@
       "model": "gpt-4.1-mini",
       "max_tool_rounds": 6,
       "memory_window": 20,
-      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
+      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Em emails, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional não pedido. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
       "tools": [
         "list_available_tools",
         "list_available_agents",
@@ -297,6 +372,7 @@
         "create_notion_task",
         "list_notion_notes",
         "create_notion_note",
+        "edit_notion_item",
         "list_calendar_events",
         "create_calendar_event",
         "list_tech_news",

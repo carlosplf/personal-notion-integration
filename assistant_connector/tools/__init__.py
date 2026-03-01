@@ -5,6 +5,7 @@ from assistant_connector.tools.news_tools import list_tech_news
 from assistant_connector.tools.notion_tools import (
     create_notion_note,
     create_notion_task,
+    edit_notion_item,
     list_notion_notes,
     list_notion_tasks,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "list_calendar_events",
     "create_notion_note",
     "create_notion_task",
+    "edit_notion_item",
     "list_notion_notes",
     "list_notion_tasks",
     "send_email",

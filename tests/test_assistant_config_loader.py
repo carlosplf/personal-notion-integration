@@ -14,12 +14,14 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("list_calendar_events", agent.tools)
         self.assertIn("list_notion_notes", agent.tools)
         self.assertIn("create_notion_note", agent.tools)
+        self.assertIn("edit_notion_item", agent.tools)
         self.assertIn("list_tech_news", agent.tools)
 
     def test_write_tools_flagged_as_write_operations(self):
         configuration = load_assistant_configuration()
         self.assertTrue(configuration.tools["create_notion_task"].write_operation)
         self.assertTrue(configuration.tools["create_notion_note"].write_operation)
+        self.assertTrue(configuration.tools["edit_notion_item"].write_operation)
         self.assertTrue(configuration.tools["create_calendar_event"].write_operation)
         self.assertTrue(configuration.tools["send_email"].write_operation)
 

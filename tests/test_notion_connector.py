@@ -377,6 +377,88 @@ class TestNotionConnector(unittest.TestCase):
         self.assertTrue(notes[0]["date"].startswith("2026-03-02"))
         self.assertEqual(notes[0]["tags"], ["GENERAL"])
 
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_notion_page_updates_task_fields(self, mock_load_credentials, mock_get, mock_patch):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "id": "task-page",
+                "url": "https://notion.so/task-page",
+                "properties": {
+                    "Task": {"type": "title"},
+                    "When": {"type": "date"},
+                    "Project": {"type": "select"},
+                    "Tags": {"type": "multi_select"},
+                    "DONE": {"type": "checkbox"},
+                },
+            }
+        )
+        mock_patch.return_value = _MockResponse({"id": "task-page", "url": "https://notion.so/task-page"})
+
+        result = notion_connector.update_notion_page(
+            {
+                "item_type": "task",
+                "page_id": "123456781234123412341234567890ab",
+                "task_name": "Atualizar backlog",
+                "due_date": "2026-03-11",
+                "project": "Pessoal",
+                "tags": ["FAST"],
+                "done": True,
+            },
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(result["id"], "task-page")
+        payload = mock_patch.call_args.kwargs["json"]["properties"]
+        self.assertEqual(payload["Task"]["title"][0]["text"]["content"], "Atualizar backlog")
+        self.assertEqual(payload["When"]["date"]["start"], "2026-03-11")
+        self.assertEqual(payload["Project"]["select"]["name"], "Pessoal")
+        self.assertEqual(payload["Tags"]["multi_select"][0]["name"], "FAST")
+        self.assertTrue(payload["DONE"]["checkbox"])
+
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_notion_page_updates_card_fields(self, mock_load_credentials, mock_get, mock_patch):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "id": "card-page",
+                "url": "https://notion.so/card-page",
+                "properties": {
+                    "Name": {"type": "title"},
+                    "Tags": {"type": "select"},
+                    "Date": {"type": "date"},
+                    "Observações": {"type": "rich_text"},
+                    "URL": {"type": "url"},
+                },
+            }
+        )
+        mock_patch.return_value = _MockResponse({"id": "card-page", "url": "https://notion.so/card-page"})
+
+        result = notion_connector.update_notion_page(
+            {
+                "item_type": "card",
+                "page_id": "card-page",
+                "note_name": "Novo card",
+                "tag": "IDEA",
+                "date": "2026-03-12",
+                "observations": "Texto do card",
+                "url": "https://example.com",
+            },
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(result["id"], "card-page")
+        payload = mock_patch.call_args.kwargs["json"]["properties"]
+        self.assertEqual(payload["Name"]["title"][0]["text"]["content"], "Novo card")
+        self.assertEqual(payload["Tags"]["select"]["name"], "IDEA")
+        self.assertEqual(payload["Date"]["date"]["start"], "2026-03-12")
+        self.assertEqual(payload["URL"]["url"], "https://example.com")
+        self.assertTrue(payload["Observações"]["rich_text"])
+
 
 if __name__ == "__main__":
     unittest.main()
