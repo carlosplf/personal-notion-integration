@@ -8,6 +8,7 @@ credentials.json
 notion_credentials.json
 token.json
 email_config.json
+openai_prompt.txt
 
 # C extensions
 *.so

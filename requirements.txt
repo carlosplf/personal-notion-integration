@@ -11,6 +11,7 @@ cffi==2.0.0
 charset-normalizer==3.4.4
 cryptography==46.0.5
 distro==1.9.0
+discord.py==2.6.4
 frozenlist==1.8.0
 google-api-core==2.30.0
 google-api-python-client==2.190.0
