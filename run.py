@@ -6,8 +6,8 @@ from notion_connector import notion_connector
 
 # from tests import mock_gpt_data
 
-# Days in the past to filter Tasks in Notion.
-DAYS_TO_CONSIDER = 7
+# Day offset for Notion task filtering (0 = today).
+DAYS_TO_CONSIDER = 0
 
 
 if __name__ == "__main__":

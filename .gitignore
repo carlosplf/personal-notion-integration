@@ -12,6 +12,9 @@ email_config.json
 # C extensions
 *.so
 
+# Log files
+log_file.txt
+
 # Distribution / packaging
 .Python
 build/

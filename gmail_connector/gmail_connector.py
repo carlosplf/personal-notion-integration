@@ -101,6 +101,9 @@ def send_email_with_tasks(all_tasks, chatgpt_answer, project_logger,
         project_logger,
         to_file=fake_send
     )
+    if not email_message:
+        project_logger.error("Email body generation failed.")
+        return None
 
     if fake_send:
         return True
