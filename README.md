@@ -1,93 +1,92 @@
-# Personal assistant :rocket:
+# Personal Assistant for Discord :rocket:
 
-Based on a Notion control panel, the software will fetch the tasks that must be completed in the next __N__ days and send them by email daily.
+![Personal Assistant Banner](./banner/personal-assistant-banner.png)
 
-The idea is to use this API connection with Notion to automate more things, and include more information in the automated email.
+A personal digital assistant on Discord to help with your daily routine across multiple domains: tasks, email, calendar, readings, and news.
 
-## How to use
+The project is integration-first: Notion is one of the connectors (not the center of the architecture), alongside OpenAI, Gmail, Google Calendar, and other assistant capabilities.
 
-### Setup Notion
+## What this project is
 
-The software is based on a specific table structure (dataset) in Notion.
+This bot centralizes personal productivity workflows in Discord using slash commands and LLM support.
 
-The dataset to be used as a task base must contain the following properties for each item:
-- Tags (used as effort/context hints like `TAKES TIME`, `FAST`, `FUP`)
-- Deadline (date field used to filter the closest tasks)
-- ASAP (checkbox) (not used for now)
-- DONE (checkbox)
+Current focus:
+- Task capture and prioritization
+- Calendar summary and event creation
+- Email-ready task summaries
 
-Without these properties, task collection will not work correctly.
+Planned/expanding scope:
+- Reading workflows
+- News digests
+- Broader personal assistant automations
 
-### Create a Google GMail API credentials
+## Architecture at a glance
 
-Visit the [website](https://developers.google.com/gmail/api/quickstart/python) to follow the tutorial and create a project on Google Cloud with proper credentials.
+Main modules:
+- `run.py`: app entrypoint
+- `discord_bot.py`: Discord client and slash commands
+- `notion_connector/`: task read/write integration
+- `gmail_connector/`: Gmail auth and email sending
+- `calendar_connector/`: Google Calendar read/write integration
+- `openai_connector/`: LLM prompts/parsing/summaries
+- `templates/`: email rendering templates
+- `utils/`: logging, credential loading, parsing helpers
 
-The Google Cloud credentials file must be in the project root folder with the name `'credentials.json'`. After the authentication, a `token.json` file will be created.
-This project now also supports Google Calendar read/write access (`calendar.readonly` and `calendar.events`) through `calendar_connector/`.
+## Setup
 
-### Create your Notion credentials
-
-Follow the [Notion guide](https://developers.notion.com/docs/authorization) and create your API credentials. Put it inside a `.env` file, following this format:
-
-```js
-NOTION_DATABASE_ID="8be..."
-NOTION_API_KEY="secret_x0l..."
-```
-
-### Add email configurations (optional)
-
-The software will look for some settings like source and destination email inside the '.env' file in the root folder of the project. The file must follow the following format:
-
-```js
-EMAIL_FROM="example@gmail.com"
-EMAIL_TO="example@gmail.com"
-DISPLAY_NAME="Username"
-```
-
-### Get your OpenAI key
-
-An OpenAPI API Key can be generated [here](https://platform.openai.com/account/api-keys). Put it inside the `.env` file.
-
-```js
-OPENAI_KEY="sk-rm..."
-```
-
-### Configure log path
-
-This software uses the [logging](https://docs.python.org/3/library/logging.html) python library. A path must be inserted in the `.env` file. Log messages will be streamed to the log file AND to the terminal output.
-
-```js
-LOG_PATH="."
-```
-
-### Add Discord bot token
-
-Create your bot in the Discord Developer Portal and put the token in `.env`:
-
-```js
-DISCORD_BOT_TOKEN="your_bot_token_here"
-DISCORD_GUILD_ID="123456789012345678" // optional, recommended for instant slash command sync
-API_DAYS_TO_CONSIDER="0" // optional, includes overdue tasks plus tasks due in the next N days
-```
-
-### Install requirements and run the bot :racing_car:
-
-Now that all the necessary informations are present in the `.env` file, you just need to install the python requirements and run the software.
+### 1) Python environment
 
 ```sh
 python3 -m venv ./env
+source ./env/bin/activate
 pip install -r requirements.txt
+```
+
+### 2) Google credentials (Gmail + Calendar)
+
+Follow the Google API quickstart to create OAuth credentials:
+- https://developers.google.com/gmail/api/quickstart/python
+
+Place `credentials.json` in the project root. After first auth flow, `token.json` is generated.
+
+### 3) Notion credentials (optional but required for task commands)
+
+Follow the Notion auth guide:
+- https://developers.notion.com/docs/authorization
+
+### 4) Configure `.env`
+
+Create a `.env` at project root:
+
+```env
+NOTION_DATABASE_ID="8be..."
+NOTION_API_KEY="secret_x0l..."
+OPENAI_KEY="sk-..."
+EMAIL_FROM="example@gmail.com"
+EMAIL_TO="example@gmail.com"
+DISPLAY_NAME="Username"
+LOG_PATH="."
+DISCORD_BOT_TOKEN="your_bot_token_here"
+DISCORD_GUILD_ID="123456789012345678" # optional, faster slash-command sync
+API_DAYS_TO_CONSIDER="0"               # optional, includes overdue + next N days
+```
+
+Notes:
+- `DISCORD_BOT_TOKEN` is required to run the assistant.
+- Notion vars are required for Notion-related task flows.
+
+## Run
+
+```sh
 python run.py
 ```
 
-## Discord usage
+## Discord commands (current)
 
-After `python run.py`, use the slash command:
-
-- `/tasks` -> fetches tasks from Notion and returns a standardized Markdown summary in the Discord channel.
-- `/add_task <texto>` -> uses LLM to interpret text, extract task/project/date/tags and create the task in Notion.
-- `/calendar` -> fetches events from the next 7 days in Google Calendar and returns a friendly markdown summary generated by LLM.
-- `/add_event <texto>` -> uses LLM to interpret event text, extract title/date/time/timezone and create the event in Google Calendar.
+- `/tasks` → fetches tasks and returns a prioritized markdown summary.
+- `/add_task <texto>` → parses natural language and creates a task in Notion.
+- `/calendar` → summarizes your next 7 days from Google Calendar.
+- `/add_event <texto>` → parses natural language and creates a calendar event.
 
 ## Run as Ubuntu service (systemd)
 
@@ -95,7 +94,7 @@ Service template:
 
 `deploy/systemd/personal-notion-discord-bot.service`
 
-Install and start (requires sudo):
+Install and start (system service, requires sudo):
 
 ```sh
 sudo cp deploy/systemd/personal-notion-discord-bot.service /etc/systemd/system/
