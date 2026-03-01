@@ -1,13 +1,13 @@
 [Unit]
-Description=Personal Notion Discord Bot
+Description=Personal Assistant Discord Bot
 After=network.target
 
 [Service]
 Type=simple
 User=carlos
-WorkingDirectory=/home/carlos/Projects/personal-notion-integration
-EnvironmentFile=/home/carlos/Projects/personal-notion-integration/.env
-ExecStart=/home/carlos/Projects/personal-notion-integration/env/bin/python /home/carlos/Projects/personal-notion-integration/run.py
+WorkingDirectory=/home/carlos/Projects/personal-assistant
+EnvironmentFile=/home/carlos/Projects/personal-assistant/.env
+ExecStart=/home/carlos/Projects/personal-assistant/env/bin/python /home/carlos/Projects/personal-assistant/run.py
 Restart=always
 RestartSec=5
 

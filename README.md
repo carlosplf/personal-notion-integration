@@ -1,4 +1,4 @@
-# Notion Bot to send email with Tasks :rocket:
+# Personal assistant :rocket:
 
 Based on a Notion control panel, the software will fetch the tasks that must be completed in the next __N__ days and send them by email daily.
 

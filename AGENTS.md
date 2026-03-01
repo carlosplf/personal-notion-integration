@@ -1,4 +1,4 @@
-# AGENTS.md — Project Scope (personal-notion-integration)
+# AGENTS.md — Project Scope (Personal assistant)
 
 Este arquivo complementa `/home/carlos/AGENTS.md` com regras específicas deste projeto.
 
