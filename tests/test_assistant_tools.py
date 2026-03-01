@@ -32,8 +32,9 @@ def _build_context():
 
 
 class TestAssistantTools(unittest.TestCase):
+    @patch("assistant_connector.tools.news_tools._load_sources_config")
     @patch("assistant_connector.tools.news_tools.urlopen")
-    def test_list_tech_news_returns_rss_and_hn_items(self, mock_urlopen):
+    def test_list_tech_news_returns_configured_sources_only(self, mock_urlopen, mock_load_sources):
         class _Response:
             def __init__(self, content):
                 self._content = content
@@ -49,14 +50,18 @@ class TestAssistantTools(unittest.TestCase):
 
         rss_payload = b"""<?xml version="1.0"?>
         <rss><channel>
-          <item><title>AI launch</title><link>https://example.com/a</link><pubDate>Mon, 01 Mar 2026 20:00:00 GMT</pubDate><description>tech</description></item>
+          <item><title>AI launch</title><link>https://example.com/a</link><pubDate>Mon, 01 Mar 2026 20:00:00 GMT</pubDate><description>technology</description></item>
         </channel></rss>"""
         top_ids_payload = b"[1001]"
         hn_item_payload = b'{"id":1001,"title":"Startup growth","url":"https://news.ycombinator.com/item?id=1001","time":1772409600}'
+        mock_load_sources.return_value = {
+            "defaults": {"categories": ["startup"], "date_filter": {"mode": "recent", "lookback_days": 3650}},
+            "sources": [
+                {"name": "techcrunch", "url": "https://techcrunch.com/", "enabled": True, "filters": {}},
+                {"name": "hackernews", "url": "https://news.ycombinator.com/", "enabled": True, "filters": {}},
+            ],
+        }
         mock_urlopen.side_effect = [
-            _Response(rss_payload),
-            _Response(rss_payload),
-            _Response(rss_payload),
             _Response(rss_payload),
             _Response(top_ids_payload),
             _Response(hn_item_payload),
@@ -69,6 +74,7 @@ class TestAssistantTools(unittest.TestCase):
 
         self.assertEqual(result["returned"], 1)
         self.assertTrue(any(item["source"] == "Hacker News" for item in result["news"]))
+        self.assertEqual(mock_urlopen.call_count, 3)
 
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_tasks_from_control_panel")
     def test_list_notion_tasks_clamps_inputs(self, mock_collect_tasks):

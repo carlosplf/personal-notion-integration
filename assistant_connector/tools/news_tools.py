@@ -3,52 +3,55 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 
 
 DEFAULT_TIMEOUT_SECONDS = 8
-RSS_SOURCES = {
-    "TechCrunch": "https://techcrunch.com/feed/",
-    "The Verge": "https://www.theverge.com/rss/tech/index.xml",
-    "Ars Technica": "https://feeds.arstechnica.com/arstechnica/technology-lab",
-    "WIRED": "https://www.wired.com/feed/category/gear/latest/rss",
-}
+SOURCES_CONFIG_PATH = Path(__file__).resolve().parents[2] / "news-sources" / "sources.json"
 HN_TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM_URL_TEMPLATE = "https://hacker-news.firebaseio.com/v0/item/{item_id}.json"
+SOURCE_REGISTRY = {
+    "hackernews": {"kind": "hacker_news", "display_name": "Hacker News"},
+    "techcrunch": {"kind": "rss", "display_name": "TechCrunch", "rss_url": "https://techcrunch.com/feed/"},
+    "wsj": {"kind": "rss", "display_name": "WSJ", "rss_url": "https://feeds.a.dj.com/rss/RSSWSJD.xml"},
+    "nytimes": {
+        "kind": "rss",
+        "display_name": "NYTimes",
+        "rss_url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+    },
+}
 
 
 def list_tech_news(arguments, _context):
     limit = int(arguments.get("limit", 8))
     limit = min(max(limit, 1), 20)
-    topic = str(arguments.get("topic", "technology")).strip() or "technology"
-    include_hacker_news = bool(arguments.get("include_hacker_news", True))
-    max_age_hours = int(arguments.get("max_age_hours", 36))
-    max_age_hours = min(max(max_age_hours, 6), 168)
+    config = _load_sources_config()
+    defaults = config.get("defaults", {})
+    default_categories = _normalize_categories(defaults.get("categories"))
+    cutoff_utc = _build_cutoff(defaults.get("date_filter", {}))
+    topic = ", ".join(default_categories)
 
     all_items = []
     errors = []
-    cutoff_utc = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
-    for source_name, rss_url in RSS_SOURCES.items():
+    for source in config.get("sources", []):
+        if not source.get("enabled", True):
+            continue
+        source_name, source_kind, source_url = _resolve_source_strategy(source)
+        source_categories = _normalize_categories(source.get("filters", {}).get("categories"), default_categories)
+        source_cutoff = _build_cutoff(source.get("filters", {}).get("date_filter", {}), fallback=cutoff_utc)
         try:
-            all_items.extend(_fetch_rss_items(source_name, rss_url, cutoff_utc=cutoff_utc))
+            if source_kind == "hacker_news":
+                fetched_items = _fetch_hacker_news_items(cutoff_utc=source_cutoff)
+            else:
+                fetched_items = _fetch_rss_items(source_name, source_url, cutoff_utc=source_cutoff)
+            all_items.extend([item for item in fetched_items if _matches_categories(item, source_categories)])
         except (OSError, ValueError, ET.ParseError, json.JSONDecodeError) as exc:
             errors.append(f"{source_name}: {exc}")
 
-    if include_hacker_news:
-        try:
-            all_items.extend(_fetch_hacker_news_items(cutoff_utc=cutoff_utc))
-        except (OSError, ValueError, ET.ParseError, json.JSONDecodeError) as exc:
-            errors.append(f"Hacker News: {exc}")
-
-    normalized_topic = topic.lower()
-    topic_filtered = [
-        item
-        for item in all_items
-        if normalized_topic in item["title"].lower() or normalized_topic in item.get("summary", "").lower()
-    ]
-    selected = topic_filtered if topic_filtered else all_items
+    selected = all_items
     selected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
     selected = selected[:limit]
 
@@ -60,6 +63,68 @@ def list_tech_news(arguments, _context):
         "sources": sorted({item["source"] for item in all_items}),
         "errors": errors,
     }
+
+
+def _load_sources_config():
+    with SOURCES_CONFIG_PATH.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid news sources configuration format.")
+    if not isinstance(payload.get("sources"), list):
+        raise ValueError("Invalid news sources configuration: 'sources' must be a list.")
+    return payload
+
+
+def _resolve_source_strategy(source: dict[str, object]):
+    source_name = str(source.get("name", "")).strip()
+    source_url = str(source.get("url", "")).strip()
+    if not source_name:
+        raise ValueError("Source entry missing 'name'.")
+    if not source_url:
+        raise ValueError(f"Source '{source_name}' missing 'url'.")
+
+    normalized_name = source_name.lower()
+    registry_entry = SOURCE_REGISTRY.get(normalized_name)
+    if registry_entry:
+        kind = str(registry_entry["kind"])
+        resolved_url = str(registry_entry.get("rss_url", source_url))
+        display_name = str(registry_entry.get("display_name", source_name))
+        return display_name, kind, resolved_url
+
+    if "news.ycombinator.com" in source_url:
+        return source_name, "hacker_news", source_url
+    return source_name, "rss", source_url
+
+
+def _normalize_categories(raw_categories, fallback=None):
+    candidate = raw_categories if raw_categories is not None else fallback
+    if candidate is None:
+        raise ValueError("At least one category must be configured in news sources.")
+    if not isinstance(candidate, list):
+        raise ValueError("News categories must be provided as a list.")
+    categories = [str(item).strip().lower() for item in candidate if str(item).strip()]
+    if not categories:
+        raise ValueError("At least one non-empty category must be configured in news sources.")
+    return categories
+
+
+def _build_cutoff(date_filter: dict[str, object], fallback: datetime | None = None):
+    if not date_filter:
+        if fallback is not None:
+            return fallback
+        raise ValueError("Missing date_filter configuration.")
+    mode = str(date_filter.get("mode", "")).strip().lower()
+    if mode != "recent":
+        raise ValueError("Unsupported date_filter.mode. Only 'recent' is supported.")
+    lookback_days = int(date_filter.get("lookback_days", 0))
+    if lookback_days <= 0:
+        raise ValueError("date_filter.lookback_days must be a positive integer.")
+    return datetime.now(timezone.utc) - timedelta(days=lookback_days)
+
+
+def _matches_categories(item: dict[str, str], categories: list[str]):
+    searchable_text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+    return any(category in searchable_text for category in categories)
 
 
 def _fetch_rss_items(source_name: str, rss_url: str, *, cutoff_utc: datetime):
