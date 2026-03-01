@@ -98,6 +98,22 @@ class TestConversationMemoryStore(unittest.TestCase):
             self.assertLessEqual(len(row[0]), 500)
             self.assertLessEqual(len(row[1]), 500)
 
+    def test_clear_session_removes_messages_and_tool_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            memory_store.append_message("session-1", "user", "oi")
+            memory_store.log_tool_call("session-1", "tool", {"a": 1}, {"ok": True})
+
+            memory_store.clear_session("session-1")
+
+            self.assertEqual(memory_store.get_recent_messages("session-1", limit=10), [])
+            with sqlite3.connect(db_path) as connection:
+                row = connection.execute(
+                    "SELECT COUNT(*) FROM tool_calls WHERE session_id='session-1'"
+                ).fetchone()
+            self.assertEqual(row[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

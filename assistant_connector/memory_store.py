@@ -93,6 +93,18 @@ class ConversationMemoryStore:
             self._prune_tool_calls(connection, session_id)
             connection.commit()
 
+    def clear_session(self, session_id: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "DELETE FROM conversation_messages WHERE session_id = ?",
+                (session_id,),
+            )
+            connection.execute(
+                "DELETE FROM tool_calls WHERE session_id = ?",
+                (session_id,),
+            )
+            connection.commit()
+
     @staticmethod
     def _truncate_text(text: str, limit: int) -> str:
         if len(text) <= limit:

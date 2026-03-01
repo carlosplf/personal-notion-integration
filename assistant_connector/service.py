@@ -36,6 +36,20 @@ class AssistantService:
             message=message,
         )
 
+    def reset_chat(
+        self,
+        *,
+        user_id: str,
+        channel_id: str,
+        guild_id: str | None,
+    ) -> None:
+        session_id = self.build_session_id(
+            user_id=user_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+        self._runtime.reset_session(session_id=session_id)
+
     @staticmethod
     def build_session_id(*, user_id: str, channel_id: str, guild_id: str | None) -> str:
         return f"{guild_id or 'dm'}:{channel_id}:{user_id}"

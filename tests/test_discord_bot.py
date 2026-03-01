@@ -157,6 +157,11 @@ class TestDiscordBot(unittest.TestCase):
         message = discord_bot.build_bot_response(markdown_answer)
         self.assertEqual(message, markdown_answer)
 
+    def test_build_new_chat_response(self):
+        message = discord_bot.build_new_chat_response()
+        self.assertIn("Nova conversa iniciada", message)
+        self.assertIn("Limpei o histórico", message)
+
     def test_filter_tasks_for_today(self):
         today = datetime.date.today().isoformat()
         tasks = [

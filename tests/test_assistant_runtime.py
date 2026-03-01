@@ -334,7 +334,7 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(answer, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
-    def test_runtime_blocks_sensitive_write_tool_without_user_ok(self):
+    def test_runtime_executes_sensitive_write_tool_with_model_confirmation(self):
         global WRITE_TOOL_CALL_COUNT
         WRITE_TOOL_CALL_COUNT = 0
 
@@ -354,7 +354,7 @@ class TestAssistantRuntime(unittest.TestCase):
             {
                 "id": "resp-2",
                 "output": [],
-                "output_text": "Confirmação ok necessária.",
+                "output_text": "Email enviado.",
             },
         ]
         tool_definitions = {
@@ -383,9 +383,8 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="envia agora",
             )
 
-        self.assertEqual(answer, "Confirmação ok necessária.")
-        self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
-        self.assertIn("ok_confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
+        self.assertEqual(answer, "Email enviado.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_executes_sensitive_write_tool_after_clear_confirmation(self):
         global WRITE_TOOL_CALL_COUNT
@@ -433,6 +432,57 @@ class TestAssistantRuntime(unittest.TestCase):
                 channel_id="channel",
                 guild_id="guild",
                 message="pode enviar",
+            )
+
+        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
+
+    def test_runtime_executes_sensitive_write_tool_with_natural_confirmation_word(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "create_notion_task",
+                        "arguments": "{\"task_name\":\"Nova tarefa\",\"confirmed\":true}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Tarefa criada.",
+            },
+        ]
+        tool_definitions = {
+            "create_notion_task": ToolDefinition(
+                name="create_notion_task",
+                description="Cria tarefa",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["create_notion_task"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="confirmar",
             )
 
         self.assertEqual(answer, "Tarefa criada.")

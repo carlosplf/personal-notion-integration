@@ -289,6 +289,9 @@ def build_bot_response(answer):
     content = _ensure_markdown_response(answer)
     return _truncate_text(content, MAX_DISCORD_MESSAGE_LENGTH)
 
+def build_new_chat_response():
+    return "## Nova conversa iniciada\n\nPronto. Limpei o histórico deste chat e vou responder sem contexto anterior."
+
 
 def create_discord_client(project_logger=None):
     logger = project_logger or create_logger.create_logger()
@@ -528,6 +531,42 @@ def create_discord_client(project_logger=None):
     @tree.command(name="pa", description="Talk to your personal assistant")
     async def pa_command(interaction: discord.Interaction, input_text: str):
         await _run_personal_assistant_command(interaction, "pa", input_text)
+
+    @tree.command(name="new_chat", description="Start a new conversation (clear assistant history for this chat)")
+    async def new_chat_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "new_chat"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            service = get_assistant_service()
+            await asyncio.to_thread(
+                service.reset_chat,
+                user_id=str(interaction.user.id),
+                channel_id=str(interaction.channel_id),
+                guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+            )
+            await interaction.followup.send(build_new_chat_response(), ephemeral=True)
+        except Exception as error:
+            logger.exception("Error running /new_chat command")
+            await interaction.followup.send(build_error_response(error), ephemeral=True)
+
+    @tree.command(name="reset", description="Reset conversation context (clear assistant history for this chat)")
+    async def reset_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "reset"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            service = get_assistant_service()
+            await asyncio.to_thread(
+                service.reset_chat,
+                user_id=str(interaction.user.id),
+                channel_id=str(interaction.channel_id),
+                guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+            )
+            await interaction.followup.send(build_new_chat_response(), ephemeral=True)
+        except Exception as error:
+            logger.exception("Error running /reset command")
+            await interaction.followup.send(build_error_response(error), ephemeral=True)
 
     @client.event
     async def on_ready():

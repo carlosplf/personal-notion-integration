@@ -15,10 +15,14 @@ class _FakeLogger:
 class _FakeRuntime:
     def __init__(self):
         self.calls = []
+        self.reset_calls = []
 
     def process_user_message(self, **kwargs):
         self.calls.append(kwargs)
         return "ok"
+
+    def reset_session(self, **kwargs):
+        self.reset_calls.append(kwargs)
 
 
 class _FakeResponses:
@@ -57,6 +61,18 @@ class TestAssistantService(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(runtime.calls[0]["session_id"], "30:20:10")
         self.assertEqual(runtime.calls[0]["message"], "oi")
+
+    def test_reset_chat_delegates_to_runtime_with_computed_session_id(self):
+        runtime = _FakeRuntime()
+        service = AssistantService(runtime=runtime)
+
+        service.reset_chat(
+            user_id="10",
+            channel_id="20",
+            guild_id="30",
+        )
+
+        self.assertEqual(runtime.reset_calls[0]["session_id"], "30:20:10")
 
     def test_create_assistant_service_applies_llm_model_env_override(self):
         config = {
