@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+import re
 import requests
 
 from utils import load_credentials
@@ -204,3 +205,666 @@ def create_task_in_control_panel(task_data, project_logger=None):
     if last_error is not None:
         last_error.raise_for_status()
     raise RuntimeError("Failed to create task in Notion")
+
+
+def _get_notes_database_id(project_logger):
+    raw_notes_database_id = str(os.getenv("NOTION_NOTES_DB_ID", "")).strip()
+    if raw_notes_database_id:
+        normalized_id = _normalize_notion_object_id(raw_notes_database_id)
+        return normalized_id
+    error_message = "Missing required environment variable: NOTION_NOTES_DB_ID"
+    project_logger.error(error_message)
+    raise ValueError(error_message)
+
+
+def _normalize_notion_object_id(raw_value):
+    value = str(raw_value or "").strip()
+    if not value:
+        return value
+
+    dashed_match = re.search(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        value,
+    )
+    if dashed_match:
+        return dashed_match.group(0).lower()
+
+    compact_match = re.search(r"[0-9a-fA-F]{32}", value)
+    if compact_match:
+        compact = compact_match.group(0).lower()
+        return (
+            f"{compact[0:8]}-{compact[8:12]}-{compact[12:16]}-"
+            f"{compact[16:20]}-{compact[20:32]}"
+        )
+
+    return value
+
+
+def _build_create_note_payload(note_data, tags_property_type, observations_property):
+    tag_payload = (
+        {"multi_select": [{"name": note_data["tag"]}]}
+        if tags_property_type == "multi_select"
+        else {"select": {"name": note_data["tag"]}}
+    )
+
+    properties = {
+        "Name": {
+            "title": [{"text": {"content": note_data["note_name"]}}],
+        },
+        "Date": {
+            "date": {"start": note_data["date"]},
+        },
+        "Tags": tag_payload,
+        "URL": {
+            "url": note_data["url"],
+        },
+    }
+
+    if note_data["observations"]:
+        properties[observations_property] = {
+            "rich_text": _build_notion_rich_text_chunks(note_data["observations"]),
+        }
+
+    return properties
+
+
+def _build_create_note_properties(
+    note_data,
+    title_property,
+    date_property,
+    tags_property=None,
+    tags_property_type="multi_select",
+    observations_property=None,
+    url_property=None,
+):
+    properties = {
+        title_property: {
+            "title": [{"text": {"content": note_data["note_name"]}}],
+        },
+        date_property: {
+            "date": {"start": note_data["date"]},
+        },
+    }
+
+    if tags_property:
+        if tags_property_type == "select":
+            properties[tags_property] = {"select": {"name": note_data["tag"]}}
+        else:
+            properties[tags_property] = {"multi_select": [{"name": note_data["tag"]}]}
+
+    if url_property and note_data["url"]:
+        properties[url_property] = {"url": note_data["url"]}
+
+    if observations_property and note_data["observations"]:
+        properties[observations_property] = {
+            "rich_text": _build_notion_rich_text_chunks(note_data["observations"]),
+        }
+
+    return properties
+
+
+def _build_notion_rich_text_chunks(text, chunk_size=1800):
+    value = str(text or "")
+    if not value:
+        return []
+
+    segments = _parse_markdown_segments(value)
+    rich_text = []
+    for segment in segments:
+        segment_text = segment["text"]
+        if not segment_text:
+            continue
+        chunks = [segment_text[i : i + chunk_size] for i in range(0, len(segment_text), chunk_size)]
+        for chunk in chunks:
+            rich_item = {
+                "type": "text",
+                "text": {
+                    "content": chunk,
+                },
+                "annotations": {
+                    "bold": bool(segment.get("bold", False)),
+                    "italic": bool(segment.get("italic", False)),
+                    "strikethrough": False,
+                    "underline": False,
+                    "code": bool(segment.get("code", False)),
+                    "color": "default",
+                },
+                "plain_text": chunk,
+            }
+            if segment.get("url"):
+                rich_item["text"]["link"] = {"url": segment["url"]}
+            rich_text.append(rich_item)
+    return rich_text
+
+
+def _parse_markdown_segments(text):
+    pattern = re.compile(
+        r"(\[([^\]]+)\]\((https?://[^)\s]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)"
+    )
+    segments = []
+    cursor = 0
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        if start > cursor:
+            segments.append({"text": text[cursor:start]})
+        if match.group(2) is not None:
+            segments.append({"text": match.group(2), "url": match.group(3)})
+        elif match.group(4) is not None:
+            segments.append({"text": match.group(4), "bold": True})
+        elif match.group(5) is not None:
+            segments.append({"text": match.group(5), "code": True})
+        elif match.group(6) is not None:
+            segments.append({"text": match.group(6), "italic": True})
+        cursor = end
+    if cursor < len(text):
+        segments.append({"text": text[cursor:]})
+    return segments
+
+
+def _build_note_children(text):
+    value = str(text or "")
+    if not value:
+        return []
+
+    blocks = []
+    for raw_line in value.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+
+        if line.startswith("### "):
+            block_type = "heading_3"
+            content = line[4:]
+        elif line.startswith("## "):
+            block_type = "heading_2"
+            content = line[3:]
+        elif line.startswith("# "):
+            block_type = "heading_1"
+            content = line[2:]
+        elif line.startswith("- ") or line.startswith("* "):
+            block_type = "bulleted_list_item"
+            content = line[2:]
+        elif re.match(r"^\d+\.\s+", line):
+            block_type = "numbered_list_item"
+            content = re.sub(r"^\d+\.\s+", "", line, count=1)
+        else:
+            block_type = "paragraph"
+            content = line
+
+        rich_text = _build_notion_rich_text_chunks(content)
+        if not rich_text:
+            continue
+        blocks.append(
+            {
+                "object": "block",
+                "type": block_type,
+                block_type: {"rich_text": rich_text},
+            }
+        )
+
+    if blocks:
+        return blocks
+
+    fallback = _build_notion_rich_text_chunks(value)
+    return [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": fallback},
+        }
+    ] if fallback else []
+
+
+def _fetch_database_schema(database_id, api_key):
+    headers = {
+        "accept": "application/json",
+        "Authorization": "Bearer " + api_key + "",
+        "Notion-Version": "2022-06-28",
+    }
+    response = requests.get(
+        f"https://api.notion.com/v1/databases/{database_id}",
+        headers=headers,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        return {}
+    payload = response.json()
+    properties = payload.get("properties", {})
+    return properties if isinstance(properties, dict) else {}
+
+
+def _build_note_payload_from_schema(create_data, schema_properties):
+    title_property = None
+    for property_name, metadata in schema_properties.items():
+        if metadata.get("type") == "title":
+            title_property = property_name
+            break
+    if not title_property:
+        return None
+
+    properties = {
+        title_property: {
+            "title": [{"text": {"content": create_data["note_name"]}}],
+        }
+    }
+
+    date_property = None
+    for preferred in ("Date",):
+        if schema_properties.get(preferred, {}).get("type") == "date":
+            date_property = preferred
+            break
+    if not date_property:
+        for property_name, metadata in schema_properties.items():
+            if metadata.get("type") == "date":
+                date_property = property_name
+                break
+    if date_property:
+        properties[date_property] = {"date": {"start": create_data["date"]}}
+
+    tag_properties = []
+    for preferred in ("Tags", "Type"):
+        metadata = schema_properties.get(preferred, {})
+        if metadata.get("type") in ("multi_select", "select"):
+            tag_properties.append((preferred, metadata.get("type")))
+    if not tag_properties:
+        for property_name, metadata in schema_properties.items():
+            if metadata.get("type") in ("multi_select", "select"):
+                tag_properties.append((property_name, metadata.get("type")))
+                break
+    for property_name, property_type in tag_properties:
+        if property_type == "multi_select":
+            properties[property_name] = {"multi_select": [{"name": create_data["tag"]}]}
+        else:
+            properties[property_name] = {"select": {"name": create_data["tag"]}}
+
+    if create_data["url"]:
+        for preferred in ("URL",):
+            if schema_properties.get(preferred, {}).get("type") == "url":
+                properties[preferred] = {"url": create_data["url"]}
+                break
+        else:
+            for property_name, metadata in schema_properties.items():
+                if metadata.get("type") == "url":
+                    properties[property_name] = {"url": create_data["url"]}
+                    break
+
+    observations_property = None
+    for preferred in ("Observações", "Observacoes", "Observations"):
+        if schema_properties.get(preferred, {}).get("type") == "rich_text":
+            observations_property = preferred
+            break
+    if not observations_property:
+        for property_name, metadata in schema_properties.items():
+            if metadata.get("type") == "rich_text":
+                observations_property = property_name
+                break
+    if observations_property and create_data["observations"]:
+        properties[observations_property] = {
+            "rich_text": _build_notion_rich_text_chunks(create_data["observations"]),
+        }
+
+    payload = {"properties": properties}
+    if create_data["observations"] and not observations_property:
+        payload["children"] = _build_note_children(create_data["observations"])
+    return payload
+
+
+def create_note_in_notes_db(note_data, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notes_database_id = _get_notes_database_id(project_logger)
+
+    note_name = str(note_data.get("note_name", "")).strip()
+    if not note_name:
+        raise ValueError("note_name is required")
+
+    create_data = {
+        "database_id": notes_database_id,
+        "note_name": note_name,
+        "tag": str(note_data.get("tag", "GENERAL")).strip() or "GENERAL",
+        "date": datetime.date.today().isoformat(),
+        "observations": str(note_data.get("observations", "")).strip(),
+        "url": str(note_data.get("url", "")).strip() or None,
+    }
+    request_candidates = [
+        {
+            "notion_version": "2022-06-28",
+            "parent": {"database_id": notes_database_id},
+        },
+        {
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "parent": {"data_source_id": notes_database_id},
+        },
+    ]
+    schema_properties = _fetch_database_schema(notes_database_id, notion_credentials["api_key"])
+    last_error = None
+    for request_candidate in request_candidates:
+        headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+            "Notion-Version": request_candidate["notion_version"],
+            "content-type": "application/json",
+        }
+        payload_candidates = []
+        schema_payload = _build_note_payload_from_schema(create_data, schema_properties)
+        if schema_payload:
+            payload = {
+                "parent": request_candidate["parent"],
+                "properties": schema_payload["properties"],
+            }
+            if schema_payload.get("children"):
+                payload["children"] = schema_payload["children"]
+            payload_candidates.append(payload)
+
+        property_candidates = [
+            _build_create_note_properties(
+                create_data,
+                title_property="Name",
+                date_property="Date",
+                tags_property="Tags",
+                tags_property_type="multi_select",
+                observations_property="Observações",
+                url_property="URL",
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Name",
+                date_property="Created",
+                tags_property="Tags",
+                tags_property_type="multi_select",
+                observations_property="Observações",
+                url_property="URL",
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Name",
+                date_property="Created",
+                tags_property="Tags",
+                tags_property_type="select",
+                observations_property=None,
+                url_property=None,
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Type",
+                date_property="Created",
+                tags_property="Tags",
+                tags_property_type="multi_select",
+                observations_property=None,
+                url_property=None,
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Type",
+                date_property="Created",
+                tags_property="Tags",
+                tags_property_type="select",
+                observations_property=None,
+                url_property=None,
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Name",
+                date_property="Date",
+                tags_property="Tags",
+                tags_property_type="multi_select",
+                observations_property="Observacoes",
+                url_property="URL",
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Name",
+                date_property="Date",
+                tags_property=None,
+                observations_property=None,
+                url_property=None,
+            ),
+            _build_create_note_properties(
+                create_data,
+                title_property="Type",
+                date_property="Created",
+                tags_property=None,
+                observations_property=None,
+                url_property=None,
+            ),
+        ]
+        for properties in property_candidates:
+            payload = {
+                "parent": request_candidate["parent"],
+                "properties": properties,
+            }
+            has_observations_property = any(
+                key in properties for key in ("Observações", "Observacoes", "Observations")
+            )
+            if create_data["observations"] and not has_observations_property:
+                payload["children"] = _build_note_children(create_data["observations"])
+            payload_candidates.append(payload)
+        for payload in payload_candidates:
+            response = requests.post(
+                "https://api.notion.com/v1/pages",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+            response_payload = {}
+            try:
+                response_payload = response.json()
+            except ValueError:
+                response_payload = {}
+            if response.status_code in (400, 404):
+                response_code = response_payload.get("code", "")
+                if response_code in ("validation_error", "object_not_found", "invalid_request"):
+                    last_error = response
+                    continue
+            response.raise_for_status()
+            return {
+                "id": response_payload.get("id"),
+                "page_url": response_payload.get("url"),
+                "note_name": create_data["note_name"],
+                "tag": create_data["tag"],
+                "date": create_data["date"],
+                "observations": create_data["observations"],
+                "url": create_data["url"],
+            }
+
+    if last_error is not None:
+        try:
+            error_payload = last_error.json()
+        except ValueError:
+            error_payload = {}
+        if error_payload.get("code") == "object_not_found":
+            raise ValueError(
+                "NOTION_NOTES_DB_ID was not found by the Notion API. "
+                "Please verify the exact Notes database/data-source ID and sharing with the integration."
+            ) from None
+        last_error.raise_for_status()
+    raise RuntimeError("Failed to create note in Notion")
+
+
+def collect_notes_around_today(days_back=5, days_forward=5, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notes_database_id = _get_notes_database_id(project_logger)
+
+    today = datetime.date.today()
+    start_date = (today - datetime.timedelta(days=max(days_back, 0))).isoformat()
+    end_date = (today + datetime.timedelta(days=max(days_forward, 0))).isoformat()
+
+    query_candidates = [
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{notes_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "date_property": "Date",
+            "date_filter_type": "property_date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{notes_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "date_property": "Created",
+            "date_filter_type": "property_date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{notes_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "date_property": "created_time",
+            "date_filter_type": "created_time",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{notes_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "Date",
+            "date_filter_type": "property_date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{notes_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "Created",
+            "date_filter_type": "property_date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{notes_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "created_time",
+            "date_filter_type": "created_time",
+        },
+    ]
+
+    project_logger.info("Collecting notes from Notion around today...")
+
+    all_notes = []
+    next_cursor = None
+    has_more = True
+    selected_candidate = None
+    while has_more:
+        if selected_candidate is None:
+            request_payload = None
+        else:
+            request_payload = _build_notes_query_payload(
+                selected_candidate,
+                start_date,
+                end_date,
+            )
+        if next_cursor:
+            request_payload["start_cursor"] = next_cursor
+
+        if selected_candidate is None:
+            last_error = None
+            for candidate in query_candidates:
+                request_payload = _build_notes_query_payload(candidate, start_date, end_date)
+                if next_cursor:
+                    request_payload["start_cursor"] = next_cursor
+                headers = {
+                    "accept": "application/json",
+                    "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                    "Notion-Version": candidate["notion_version"],
+                    "content-type": "application/json",
+                }
+                response = requests.post(candidate["url"], json=request_payload, headers=headers, timeout=30)
+                if response.status_code in (400, 404):
+                    response_code = response.json().get("code", "")
+                    if response_code in ("invalid_request_url", "object_not_found", "validation_error"):
+                        last_error = response
+                        continue
+                    last_error = response
+                response.raise_for_status()
+                selected_candidate = candidate
+                break
+            if selected_candidate is None:
+                last_error.raise_for_status()
+        else:
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                "Notion-Version": selected_candidate["notion_version"],
+                "content-type": "application/json",
+            }
+            response = requests.post(selected_candidate["url"], json=request_payload, headers=headers, timeout=30)
+            response.raise_for_status()
+
+        data = response.json()
+
+        for note in data.get("results", []):
+            properties = note.get("properties", {})
+            note_title = (
+                properties.get("Name", {}).get("title", [])
+                or properties.get("Type", {}).get("title", [])
+            )
+            note_date = (
+                properties.get("Date", {}).get("date")
+                or properties.get("Created", {}).get("date")
+                or {"start": note.get("created_time")}
+            )
+            tags_property = properties.get("Tags", {})
+            tags = []
+            if tags_property.get("type") == "multi_select":
+                tags = [tag.get("name") for tag in tags_property.get("multi_select", []) if tag.get("name")]
+            elif tags_property.get("type") == "select":
+                tag_name = tags_property.get("select", {}).get("name")
+                tags = [tag_name] if tag_name else []
+            elif properties.get("Type", {}).get("type") == "select":
+                type_tag = properties.get("Type", {}).get("select", {}).get("name")
+                tags = [type_tag] if type_tag else []
+
+            observations_property = properties.get("Observações", {}).get("rich_text")
+            if observations_property is None:
+                observations_property = properties.get("Observacoes", {}).get("rich_text", [])
+            observations = "".join(
+                chunk.get("plain_text") or chunk.get("text", {}).get("content", "")
+                for chunk in observations_property
+            )
+            external_url = properties.get("URL", {}).get("url")
+
+            if not note_title or not note_date or not note_date.get("start"):
+                project_logger.warning("Skipping malformed Notion note payload: %s", note.get("id"))
+                continue
+
+            all_notes.append(
+                {
+                    "name": (
+                        (note_title[0].get("plain_text") or note_title[0].get("text", {}).get("content"))
+                        if note_title else "Untitled note"
+                    ),
+                    "date": note_date["start"],
+                    "tags": tags,
+                    "observations": observations,
+                    "url": external_url,
+                    "page_url": note.get("url"),
+                }
+            )
+
+        has_more = data.get("has_more", False)
+        next_cursor = data.get("next_cursor")
+
+    return sorted(all_notes, key=lambda note: note["date"])
+
+
+def _build_notes_query_payload(candidate, start_date, end_date):
+    if candidate.get("date_filter_type") == "created_time":
+        return {
+            "filter": {
+                "and": [
+                    {"timestamp": "created_time", "created_time": {"on_or_after": start_date}},
+                    {"timestamp": "created_time", "created_time": {"on_or_before": end_date}},
+                ],
+            },
+            "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+            "page_size": 100,
+        }
+    return {
+        "filter": {
+            "and": [
+                {
+                    "property": candidate["date_property"],
+                    "date": {"on_or_after": start_date},
+                },
+                {
+                    "property": candidate["date_property"],
+                    "date": {"on_or_before": end_date},
+                },
+            ],
+        },
+        "sorts": [
+            {"property": candidate["date_property"], "direction": "ascending"},
+        ],
+        "page_size": 100,
+    }

@@ -119,6 +119,40 @@ def list_week_events(project_logger, max_results=100):
     return events
 
 
+def list_current_week_events(project_logger, max_results=100):
+    service = calendar_connect(project_logger=project_logger)
+    today = datetime.datetime.utcnow().date()
+    days_since_sunday = (today.weekday() + 1) % 7
+    week_start_date = today - datetime.timedelta(days=days_since_sunday)
+    week_start = datetime.datetime.combine(week_start_date, datetime.time.min)
+    next_week_start = week_start + datetime.timedelta(days=7)
+
+    response = service.events().list(
+        calendarId="primary",
+        timeMin=week_start.isoformat() + "Z",
+        timeMax=next_week_start.isoformat() + "Z",
+        maxResults=max_results,
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+
+    events = []
+    for event in response.get("items", []):
+        start = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
+        end = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
+        events.append(
+            {
+                "id": event.get("id"),
+                "summary": event.get("summary", "Sem título"),
+                "start": start,
+                "end": end,
+                "html_link": event.get("htmlLink"),
+                "location": event.get("location"),
+            }
+        )
+    return events
+
+
 def create_calendar_event(
     project_logger,
     summary,

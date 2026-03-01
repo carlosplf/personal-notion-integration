@@ -105,6 +105,39 @@ class TestCalendarConnector(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["summary"], "Event primary")
 
+    @patch("calendar_connector.calendar_connector.calendar_connect")
+    def test_list_current_week_events_uses_primary_calendar(self, mock_connect):
+        fake_service = _FakeService()
+        mock_connect.return_value = fake_service
+
+        events = calendar_connector.list_current_week_events(
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["summary"], "Event primary")
+        call_kwargs = fake_service.events().calls[0]
+        self.assertEqual(call_kwargs["calendarId"], "primary")
+        self.assertIn("timeMin", call_kwargs)
+        self.assertIn("timeMax", call_kwargs)
+
+    @patch("calendar_connector.calendar_connector.calendar_connect")
+    def test_list_current_week_events_on_sunday_uses_next_six_days(self, mock_connect):
+        class _SundayDateTime(calendar_connector.datetime.datetime):
+            @classmethod
+            def utcnow(cls):
+                return cls(2026, 3, 1, 12, 0, 0)
+
+        fake_service = _FakeService()
+        mock_connect.return_value = fake_service
+
+        with patch("calendar_connector.calendar_connector.datetime.datetime", _SundayDateTime):
+            calendar_connector.list_current_week_events(project_logger=_MockLogger())
+
+        call_kwargs = fake_service.events().calls[0]
+        self.assertTrue(call_kwargs["timeMin"].startswith("2026-03-01T00:00:00"))
+        self.assertTrue(call_kwargs["timeMax"].startswith("2026-03-08T00:00:00"))
+
 
 if __name__ == "__main__":
     unittest.main()

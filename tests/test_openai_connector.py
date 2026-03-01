@@ -1,11 +1,33 @@
 import unittest
+import unittest.mock
 import tempfile
+import os
 import sys
 import types
 
 sys.modules.setdefault("openai", types.SimpleNamespace(ChatCompletion=None))
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
 from openai_connector import llm_api
+
+
+class _FakeResponse:
+    def __init__(self, output_text):
+        self.output_text = output_text
+
+
+class _FakeResponsesAPI:
+    def __init__(self, output_text):
+        self.output_text = output_text
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResponse(self.output_text)
+
+
+class _FakeOpenAIClient:
+    def __init__(self, output_text):
+        self.responses = _FakeResponsesAPI(output_text)
 
 
 class TestOpenAIConnector(unittest.TestCase):
@@ -80,8 +102,142 @@ class TestOpenAIConnector(unittest.TestCase):
         self.assertEqual(parsed["end_datetime"], "2026-03-06T11:00")
         self.assertEqual(parsed["timezone"], "America/Sao_Paulo")
 
+    def test_parse_add_note_output_parses_expected_fields(self):
+        output = (
+            '{"note_name":"Insight de onboarding","tag":"IDEA",'
+            '"observations":"Criar checklist de kickoff","url":"https://example.com"}'
+        )
+        parsed = llm_api.parse_add_note_output(output)
+        self.assertEqual(parsed["note_name"], "Insight de onboarding")
+        self.assertEqual(parsed["tag"], "IDEA")
+        self.assertEqual(parsed["observations"], "Criar checklist de kickoff")
+        self.assertEqual(parsed["url"], "https://example.com")
+
+    def test_parse_add_note_output_infers_tag_when_missing(self):
+        output = '{"note_name":"Reunião com cliente","observations":"Alinhar próximos passos","url":""}'
+        parsed = llm_api.parse_add_note_output(output)
+        self.assertEqual(parsed["tag"], "MEETING")
+
     def test_event_parser_prompt_has_grammar_instruction(self):
         self.assertIn("Corrija erros gramaticais", llm_api.EVENT_PARSER_PROMPT)
+
+    def test_get_llm_model_uses_env_value(self):
+        with unittest.mock.patch.dict(os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False):
+            self.assertEqual(llm_api._get_llm_model(), "gpt-5-mini")
+
+    def test_call_openai_assistant_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient("Resumo")
+        tasks = [{"name": "Task one", "project": "Pessoal", "deadline": "2026-03-01", "tags": ["FAST"]}]
+
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            answer = llm_api.call_openai_assistant(tasks, project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+
+        self.assertEqual(answer, "Resumo")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_parse_add_task_input_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient(
+            '{"task_name":"Enviar proposta","project":"Draiven","due_date":"2026-03-05","tags":["FAST"]}'
+        )
+
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            parsed = llm_api.parse_add_task_input("enviar proposta", project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+
+        self.assertEqual(parsed["task_name"], "Enviar proposta")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_parse_add_note_input_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient(
+            '{"note_name":"Ideia","tag":"IDEA","observations":"Implementar rotina de notas","url":""}'
+        )
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            parsed = llm_api.parse_add_note_input("anotar ideia sobre rotina", project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+
+        self.assertEqual(parsed["note_name"], "Ideia")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_summarize_calendar_events_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient("Resumo da agenda")
+        events = [{"summary": "Reunião", "start": "2026-03-02T10:00:00Z", "end": "2026-03-02T11:00:00Z"}]
+
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            summary = llm_api.summarize_calendar_events(events, project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+
+        self.assertEqual(summary, "Resumo da agenda")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_build_day_summary_prompt_contains_tasks_and_events(self):
+        prompt = llm_api.build_day_summary_prompt(
+            [{"name": "Enviar proposta", "project": "Draiven", "deadline": "2026-03-01T10:00:00", "tags": ["FAST"]}],
+            [{"summary": "Daily", "start": "2026-03-01T11:00:00", "end": "2026-03-01T11:30:00", "location": "Meet"}],
+        )
+        self.assertIn("Resumo de hoje", prompt)
+        self.assertIn("Enviar proposta", prompt)
+        self.assertIn("Daily", prompt)
+
+    def test_build_period_summary_prompt_for_week_contains_labels(self):
+        prompt = llm_api.build_period_summary_prompt(
+            "semana atual",
+            [{"name": "Task week", "project": "Pessoal", "deadline": "2026-03-03", "tags": []}],
+            [{"summary": "Evento week", "start": "2026-03-03T10:00:00", "end": "2026-03-03T11:00:00"}],
+        )
+        self.assertIn("Resumo da semana atual", prompt)
+        self.assertIn("Tarefas da semana", prompt)
+        self.assertIn("Agenda da semana", prompt)
+        self.assertIn("Não liste todas as tarefas ou eventos individualmente", prompt)
+        self.assertNotIn("**HH:MM ou Dia inteiro** — Tarefa (Projeto) [Tags]", prompt)
+
+    def test_summarize_day_context_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient("## Resumo do dia")
+        tasks = [{"name": "Task", "project": "Pessoal", "deadline": "2026-03-01T10:00:00", "tags": []}]
+        events = [{"summary": "Evento", "start": "2026-03-01T12:00:00", "end": "2026-03-01T13:00:00"}]
+
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            summary = llm_api.summarize_day_context(tasks, events, project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+
+        self.assertEqual(summary, "## Resumo do dia")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_summarize_day_context_returns_empty_day_message_without_llm_call(self):
+        with unittest.mock.patch.object(llm_api, "_create_openai_client") as mocked_client:
+            summary = llm_api.summarize_day_context([], [], project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None))
+        self.assertIn("Sem tarefas e sem eventos para hoje", summary)
+        mocked_client.assert_not_called()
+
+    def test_summarize_period_context_uses_llm_model_from_env(self):
+        fake_client = _FakeOpenAIClient("## Resumo de amanhã")
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.dict(
+            os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False
+        ):
+            summary = llm_api.summarize_period_context(
+                "amanhã",
+                [{"name": "Task", "project": "Pessoal", "deadline": "2026-03-02"}],
+                [{"summary": "Evento", "start": "2026-03-02T12:00:00"}],
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
+        self.assertEqual(summary, "## Resumo de amanhã")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_summarize_period_context_returns_empty_message_without_llm(self):
+        with unittest.mock.patch.object(llm_api, "_create_openai_client") as mocked_client:
+            summary = llm_api.summarize_period_context(
+                "semana atual",
+                [],
+                [],
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
+        self.assertIn("Sem tarefas e sem eventos para esta semana", summary)
+        mocked_client.assert_not_called()
 
 
 if __name__ == "__main__":

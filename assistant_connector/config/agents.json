@@ -1,0 +1,274 @@
+{
+  "tools": [
+    {
+      "name": "list_available_tools",
+      "description": "Lista as tools disponíveis para o agente atual, com descrição e schema.",
+      "handler": "assistant_connector.tools.meta_tools:list_available_tools",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_available_agents",
+      "description": "Lista os agentes disponíveis e qual está ativo.",
+      "handler": "assistant_connector.tools.meta_tools:list_available_agents",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_notion_tasks",
+      "description": "Busca tarefas pendentes no Notion com prazo próximo e atrasadas.",
+      "handler": "assistant_connector.tools.notion_tools:list_notion_tasks",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "n_days": {
+            "type": "integer",
+            "description": "Quantidade de dias à frente para incluir na busca. 0 inclui hoje + atrasadas.",
+            "minimum": 0,
+            "maximum": 30
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de tarefas retornadas.",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_notion_task",
+      "description": "Cria uma tarefa no Notion.",
+      "handler": "assistant_connector.tools.notion_tools:create_notion_task",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_name": {
+            "type": "string",
+            "description": "Nome da tarefa."
+          },
+          "project": {
+            "type": "string",
+            "description": "Projeto da tarefa."
+          },
+          "due_date": {
+            "type": "string",
+            "description": "Data no formato YYYY-MM-DD."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags de contexto/esforço."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "task_name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_notion_notes",
+      "description": "Lista anotações no Notion em uma janela de dias ao redor de hoje.",
+      "handler": "assistant_connector.tools.notion_tools:list_notion_notes",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "days_back": {
+            "type": "integer",
+            "description": "Quantidade de dias para trás a incluir.",
+            "minimum": 0,
+            "maximum": 30
+          },
+          "days_forward": {
+            "type": "integer",
+            "description": "Quantidade de dias para frente a incluir.",
+            "minimum": 0,
+            "maximum": 30
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de anotações retornadas.",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_notion_note",
+      "description": "Cria uma anotação detalhada no Notion Notes com data de hoje.",
+      "handler": "assistant_connector.tools.notion_tools:create_notion_note",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "note_name": {
+            "type": "string",
+            "description": "Título da anotação."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Tag temática da anotação (ex.: IDEA, MEETING, STUDY)."
+          },
+          "observations": {
+            "type": "string",
+            "description": "Conteúdo livre da anotação. Pode ser completo e rico em detalhes."
+          },
+          "url": {
+            "type": "string",
+            "description": "URL opcional relacionada à anotação."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "note_name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_calendar_events",
+      "description": "Lista eventos da agenda para os próximos 7 dias.",
+      "handler": "assistant_connector.tools.calendar_tools:list_calendar_events",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "max_results": {
+            "type": "integer",
+            "description": "Máximo de eventos retornados.",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_calendar_event",
+      "description": "Cria um evento no Google Calendar.",
+      "handler": "assistant_connector.tools.calendar_tools:create_calendar_event",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Título do evento."
+          },
+          "start_datetime": {
+            "type": "string",
+            "description": "Data/hora inicial no formato YYYY-MM-DDTHH:MM."
+          },
+          "end_datetime": {
+            "type": "string",
+            "description": "Data/hora final no formato YYYY-MM-DDTHH:MM."
+          },
+          "description": {
+            "type": "string",
+            "description": "Descrição opcional do evento."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Timezone IANA, ex: America/Sao_Paulo."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "summary",
+          "start_datetime",
+          "end_datetime"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "send_email",
+      "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
+      "handler": "assistant_connector.tools.email_tools:send_email",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "recipient_email": {
+            "type": "string",
+            "description": "Email de destino. Se omitido, usa EMAIL_TO do .env."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Assunto do email."
+          },
+          "body": {
+            "type": "string",
+            "description": "Corpo do email em texto/Markdown."
+          },
+          "tone_override": {
+            "type": "string",
+            "description": "Tom opcional para este email específico."
+          },
+          "include_signature": {
+            "type": "boolean",
+            "description": "Quando true, adiciona assinatura definida em EMAIL_ASSISTANT_SIGNATURE."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "recipient_email",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "agents": [
+    {
+      "id": "personal_assistant",
+      "description": "Assistente pessoal principal para Discord com foco em produtividade pessoal.",
+      "model": "gpt-4.1-mini",
+      "max_tool_rounds": 6,
+      "memory_window": 20,
+      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
+      "tools": [
+        "list_available_tools",
+        "list_available_agents",
+        "list_notion_tasks",
+        "create_notion_task",
+        "list_notion_notes",
+        "create_notion_note",
+        "list_calendar_events",
+        "create_calendar_event",
+        "send_email"
+      ]
+    }
+  ]
+}
