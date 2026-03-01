@@ -1,0 +1,15 @@
+[Unit]
+Description=Personal Notion Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=carlos
+WorkingDirectory=/home/carlos/Projects/personal-notion-integration
+EnvironmentFile=/home/carlos/Projects/personal-notion-integration/.env
+ExecStart=/home/carlos/Projects/personal-notion-integration/env/bin/python /home/carlos/Projects/personal-notion-integration/run.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

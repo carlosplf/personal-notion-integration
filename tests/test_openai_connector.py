@@ -54,6 +54,35 @@ class TestOpenAIConnector(unittest.TestCase):
         parsed = llm_api.parse_add_task_output(output)
         self.assertEqual(parsed["tags"], ["FAST"])
 
+    def test_build_calendar_events_prompt_contains_events(self):
+        prompt = llm_api.build_calendar_events_prompt(
+            [
+                {
+                    "summary": "Reunião com cliente",
+                    "start": "2026-03-02T10:00:00Z",
+                    "end": "2026-03-02T11:00:00Z",
+                    "location": "Google Meet",
+                }
+            ]
+        )
+        self.assertIn("Agenda da semana", prompt)
+        self.assertIn("Reunião com cliente", prompt)
+
+    def test_parse_add_event_output_parses_expected_fields(self):
+        output = (
+            '{"summary":"Reunião de kickoff","start_datetime":"2026-03-06T10:00",'
+            '"end_datetime":"2026-03-06T11:00","description":"Alinhamento inicial",'
+            '"timezone":"America/Sao_Paulo"}'
+        )
+        parsed = llm_api.parse_add_event_output(output)
+        self.assertEqual(parsed["summary"], "Reunião de kickoff")
+        self.assertEqual(parsed["start_datetime"], "2026-03-06T10:00")
+        self.assertEqual(parsed["end_datetime"], "2026-03-06T11:00")
+        self.assertEqual(parsed["timezone"], "America/Sao_Paulo")
+
+    def test_event_parser_prompt_has_grammar_instruction(self):
+        self.assertIn("Corrija erros gramaticais", llm_api.EVENT_PARSER_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()

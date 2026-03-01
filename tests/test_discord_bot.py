@@ -41,6 +41,23 @@ class TestDiscordBot(unittest.TestCase):
         self.assertIn("Draiven", message)
         self.assertIn("FAST, FUP", message)
 
+    def test_build_calendar_response(self):
+        message = discord_bot.build_calendar_response("Resumo da semana")
+        self.assertIn("Agenda (7 dias)", message)
+        self.assertIn("Resumo da semana", message)
+
+    def test_build_add_event_success_response(self):
+        message = discord_bot.build_add_event_success_response(
+            {
+                "summary": "Reunião de kickoff",
+                "start": "2026-03-06T10:00:00",
+                "end": "2026-03-06T11:00:00",
+                "html_link": "https://calendar.google.com/event?id=1",
+            }
+        )
+        self.assertIn("Evento criado no Google Calendar", message)
+        self.assertIn("Reunião de kickoff", message)
+
 
 if __name__ == "__main__":
     unittest.main()

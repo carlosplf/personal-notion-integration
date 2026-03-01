@@ -3,6 +3,7 @@ import os
 import discord
 from dotenv import load_dotenv
 
+from calendar_connector import calendar_connector
 from notion_connector import notion_connector
 from openai_connector import llm_api
 from task_summary_flow import collect_tasks_and_summary
@@ -41,6 +42,22 @@ def build_add_task_success_response(task_data):
     return _truncate_text(content, MAX_DISCORD_MESSAGE_LENGTH)
 
 
+def build_calendar_response(summary):
+    content = f"## Agenda (7 dias)\n\n{summary}"
+    return _truncate_text(content, MAX_DISCORD_MESSAGE_LENGTH)
+
+
+def build_add_event_success_response(event_data):
+    content = (
+        "✅ Evento criado no Google Calendar.\n"
+        f"- **Título:** {event_data['summary']}\n"
+        f"- **Início:** {event_data['start']}\n"
+        f"- **Fim:** {event_data['end']}\n"
+        f"- **Link:** {event_data.get('html_link', 'N/A')}"
+    )
+    return _truncate_text(content, MAX_DISCORD_MESSAGE_LENGTH)
+
+
 def create_discord_client(project_logger=None):
     logger = project_logger or create_logger.create_logger()
     intents = discord.Intents.default()
@@ -67,6 +84,35 @@ def create_discord_client(project_logger=None):
             await interaction.followup.send(build_add_task_success_response(created_task))
         except Exception as error:
             logger.exception("Error running /add_task command")
+            await interaction.followup.send(build_error_response(error))
+
+    @tree.command(name="calendar", description="Summarize your calendar events for the next 7 days")
+    async def calendar_command(interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        try:
+            events = calendar_connector.list_week_events(project_logger=logger)
+            summary = llm_api.summarize_calendar_events(events, logger)
+            await interaction.followup.send(build_calendar_response(summary))
+        except Exception as error:
+            logger.exception("Error running /calendar command")
+            await interaction.followup.send(build_error_response(error))
+
+    @tree.command(name="add_event", description="Add a calendar event using natural language")
+    async def add_event_command(interaction: discord.Interaction, input_text: str):
+        await interaction.response.defer(thinking=True)
+        try:
+            parsed_event = llm_api.parse_add_event_input(input_text, logger)
+            created_event = calendar_connector.create_calendar_event(
+                project_logger=logger,
+                summary=parsed_event["summary"],
+                start_datetime=parsed_event["start_datetime"],
+                end_datetime=parsed_event["end_datetime"],
+                description=parsed_event["description"],
+                timezone=parsed_event["timezone"],
+            )
+            await interaction.followup.send(build_add_event_success_response(created_event))
+        except Exception as error:
+            logger.exception("Error running /add_event command")
             await interaction.followup.send(build_error_response(error))
 
     @client.event

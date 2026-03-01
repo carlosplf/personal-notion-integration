@@ -45,6 +45,32 @@ TASK_PARSER_PROMPT = (
     "\nExemplo de formato:"
     "\n{\"task_name\":\"...\",\"project\":\"Pessoal\",\"due_date\":\"2026-03-01\",\"tags\":[\"FAST\"]}"
 )
+EVENT_PARSER_PROMPT = (
+    "Você recebe uma frase para criar um evento no Google Calendar e deve retornar somente JSON válido."
+    "\nExtraia os campos: summary, start_datetime, end_datetime, description, timezone."
+    "\nRegras:"
+    "\n- Corrija erros gramaticais e normalize o texto do usuário antes de preencher summary/description."
+    "\n- O summary deve ser curto, claro e bem escrito."
+    "\n- A description deve ser reescrita com gramática correta quando houver texto livre do usuário."
+    "\n- start_datetime e end_datetime devem estar em formato YYYY-MM-DDTHH:MM."
+    "\n- timezone deve ser um timezone IANA (ex.: America/Sao_Paulo)."
+    "\n- Se descrição não for informada, use string vazia."
+    "\n- Se timezone não for informado, use \"America/Sao_Paulo\"."
+    "\n- Não inclua texto fora do JSON."
+    "\nExemplo:"
+    "\n{\"summary\":\"Reunião\",\"start_datetime\":\"2026-03-03T10:00\",\"end_datetime\":\"2026-03-03T11:00\",\"description\":\"Kickoff\",\"timezone\":\"America/Sao_Paulo\"}"
+)
+CALENDAR_SUMMARY_PROMPT = (
+    "Você é um assistente e deve resumir eventos da agenda da semana para Discord em português."
+    "\nFormato obrigatório em Markdown:"
+    "\n## Agenda da semana"
+    "\n- **DD/MM HH:MM** — Evento (contexto curto)"
+    "\n## Destaques"
+    "\n- Linha com conflitos, blocos longos ou janela livre."
+    "\nRegras:"
+    "\n- Seja breve e útil."
+    "\n- Se não houver eventos, responda exatamente: \"Sem eventos na agenda para os próximos 7 dias.\""
+)
 
 
 def call_openai_assistant(tasks, project_logger):
@@ -81,6 +107,39 @@ def parse_add_task_input(user_input, project_logger):
     return parse_add_task_output(completion.output_text)
 
 
+def summarize_calendar_events(events, project_logger):
+    if not events:
+        return "Sem eventos na agenda para os próximos 7 dias."
+
+    load_dotenv()
+    openai_api_key = os.getenv("OPENAI_KEY")
+    if not openai_api_key:
+        raise ValueError("Missing required environment variable: OPENAI_KEY")
+    openai_client = openai.OpenAI(api_key=openai_api_key)
+
+    project_logger.info("Calling LLM to summarize calendar events...")
+    completion = openai_client.responses.create(
+        model="gpt-4.1-mini",
+        input=build_calendar_events_prompt(events),
+    )
+    return completion.output_text
+
+
+def parse_add_event_input(user_input, project_logger):
+    load_dotenv()
+    openai_api_key = os.getenv("OPENAI_KEY")
+    if not openai_api_key:
+        raise ValueError("Missing required environment variable: OPENAI_KEY")
+    openai_client = openai.OpenAI(api_key=openai_api_key)
+
+    project_logger.info("Calling LLM to parse add_event input...")
+    completion = openai_client.responses.create(
+        model="gpt-4.1-mini",
+        input=f"{EVENT_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
+    )
+    return parse_add_event_output(completion.output_text)
+
+
 def parse_add_task_output(output_text):
     payload = _extract_json_payload(output_text)
     task_name = str(payload.get("task_name", "")).strip()
@@ -105,6 +164,31 @@ def parse_add_task_output(output_text):
         "project": project,
         "due_date": due_date,
         "tags": clean_tags,
+    }
+
+
+def parse_add_event_output(output_text):
+    payload = _extract_json_payload(output_text)
+    summary = str(payload.get("summary", "")).strip()
+    start_datetime = str(payload.get("start_datetime", "")).strip()
+    end_datetime = str(payload.get("end_datetime", "")).strip()
+    description = str(payload.get("description", "")).strip()
+    timezone = str(payload.get("timezone", "America/Sao_Paulo")).strip() or "America/Sao_Paulo"
+
+    if not summary:
+        raise ValueError("LLM did not provide summary")
+    _validate_event_datetime(start_datetime, "start_datetime")
+    _validate_event_datetime(end_datetime, "end_datetime")
+
+    if end_datetime <= start_datetime:
+        raise ValueError("LLM provided end_datetime before or equal to start_datetime")
+
+    return {
+        "summary": summary,
+        "start_datetime": start_datetime,
+        "end_datetime": end_datetime,
+        "description": description,
+        "timezone": timezone,
     }
 
 
@@ -163,6 +247,21 @@ def _sanitize_task_tags(tags):
             continue
         clean.append(value)
     return clean
+
+
+def _validate_event_datetime(value, field_name):
+    try:
+        datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M")
+    except ValueError as error:
+        raise ValueError(f"LLM did not provide a valid {field_name} (YYYY-MM-DDTHH:MM)") from error
+
+
+def build_calendar_events_prompt(events):
+    event_lines = "".join(
+        f"\n - {event.get('summary', 'Sem título')} | start: {event.get('start')} | end: {event.get('end')} | location: {event.get('location') or 'N/A'}"
+        for event in events
+    )
+    return f"{CALENDAR_SUMMARY_PROMPT}\n\nEventos:{event_lines}"
 
 
 def build_message(tasks):
