@@ -76,6 +76,39 @@ class TestAssistantTools(unittest.TestCase):
         self.assertTrue(any(item["source"] == "Hacker News" for item in result["news"]))
         self.assertEqual(mock_urlopen.call_count, 3)
 
+    @patch("assistant_connector.tools.news_tools._load_sources_config")
+    @patch("assistant_connector.tools.news_tools.urlopen")
+    def test_list_tech_news_applies_requested_age_cutoff(self, mock_urlopen, mock_load_sources):
+        class _Response:
+            def __init__(self, content):
+                self._content = content
+
+            def read(self):
+                return self._content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        rss_payload = b"""<?xml version="1.0"?>
+        <rss><channel>
+          <item><title>Tech recap</title><link>https://example.com/old</link><pubDate>Mon, 01 Mar 2021 20:00:00 GMT</pubDate><description>technology</description></item>
+        </channel></rss>"""
+        mock_load_sources.return_value = {
+            "defaults": {"categories": ["technology"], "date_filter": {"mode": "recent", "lookback_days": 3650}},
+            "sources": [{"name": "techcrunch", "url": "https://techcrunch.com/", "enabled": True, "filters": {}}],
+        }
+        mock_urlopen.side_effect = [_Response(rss_payload)]
+
+        result = news_tools.list_tech_news(
+            {"limit": 5, "max_age_hours": 6},
+            _build_context(),
+        )
+
+        self.assertEqual(result["returned"], 0)
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_tasks_from_control_panel")
     def test_list_notion_tasks_clamps_inputs(self, mock_collect_tasks):
         mock_collect_tasks.return_value = [{"name": f"Task {i}"} for i in range(60)]
