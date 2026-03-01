@@ -79,6 +79,7 @@ EMAIL_ASSISTANT_SUBJECT_PREFIX="[Assistant]"                 # optional subject 
 LOG_PATH="."
 DISCORD_BOT_TOKEN="your_bot_token_here"
 DISCORD_GUILD_ID="123456789012345678" # optional, faster slash-command sync
+DISCORD_ALLOWED_USER_ID="123456789012345678" # optional, restrict all bot usage (slash + DM) to a single Discord user ID
 API_DAYS_TO_CONSIDER="0"               # optional, includes overdue + next N days
 ASSISTANT_AGENT_ID="personal_assistant" # optional, agent id loaded from JSON config
 ASSISTANT_MEMORY_PATH="./assistant_memory.sqlite3" # optional, SQLite file for persistent chat memory
@@ -92,6 +93,7 @@ ASSISTANT_MAX_TOOL_OUTPUT_CHARS="8000" # optional, max tool output chars sent ba
 
 Notes:
 - `DISCORD_BOT_TOKEN` is required to run the assistant.
+- Set `DISCORD_ALLOWED_USER_ID` to lock the bot to your own Discord user ID.
 - Notion vars are required for Notion-related task and notes flows.
 - To send email through `/bot`, keep Gmail OAuth configured (`credentials.json` + `token.json`) and set `EMAIL_ASSISTANT_*` fields.
 - In `/bot`, the `send_email` tool requires an explicit recipient in the user message; the subject is defined by the LLM.
@@ -117,6 +119,7 @@ python run.py
 - `/pa <text>` → alias of `/bot` with the same conversational assistant behavior.
   - Through `/bot`, the agent can also send emails using the `send_email` tool (with explicit confirmation).
   - Through `/bot`, the agent can create and list Notion notes via tools (`create_notion_note`, `list_notion_notes`), including rich, detailed note content.
+- Direct Messages (DM) to the bot also use the same assistant flow as `/bot` and `/pa`.
 
 ## Run as Ubuntu service (systemd)
 

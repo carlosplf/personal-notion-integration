@@ -13,6 +13,9 @@ from task_summary_flow import collect_tasks_and_summary
 from utils import create_logger
 
 MAX_DISCORD_MESSAGE_LENGTH = 2000
+ACCESS_DENIED_MESSAGE = (
+    "🔒 Access denied: this assistant is restricted to an authorized Discord user."
+)
 
 
 def _truncate_text(text, limit):
@@ -101,6 +104,13 @@ def _default_note_name_from_input(input_text):
             normalized = line.lstrip("#-* ").strip()
             return (normalized or line)[:120]
     return "New note"
+
+
+def _is_authorized_discord_user(user_id, allowed_user_id):
+    allowed = str(allowed_user_id or "").strip()
+    if not allowed:
+        return False
+    return str(user_id) == allowed
 
 
 def build_note_payload_from_input(input_text, project_logger):
@@ -261,6 +271,7 @@ def create_discord_client(project_logger=None):
     client = discord.Client(intents=intents)
     tree = discord.app_commands.CommandTree(client)
     n_days = int(os.getenv("API_DAYS_TO_CONSIDER", "0"))
+    allowed_user_id = str(os.getenv("DISCORD_ALLOWED_USER_ID", "")).strip()
     assistant_service = None
 
     def get_assistant_service():
@@ -269,21 +280,43 @@ def create_discord_client(project_logger=None):
             assistant_service = create_assistant_service(project_logger=logger)
         return assistant_service
 
+    async def _run_personal_assistant_chat(user_id, channel_id, guild_id, input_text):
+        service = get_assistant_service()
+        answer = await asyncio.to_thread(
+            service.chat,
+            user_id=str(user_id),
+            channel_id=str(channel_id),
+            guild_id=str(guild_id) if guild_id else None,
+            message=input_text,
+        )
+        return answer
+
     async def _run_personal_assistant_command(interaction: discord.Interaction, command_name: str, input_text: str):
+        if not await _ensure_authorized_interaction(interaction, command_name):
+            return
         await interaction.response.defer(thinking=True)
         try:
-            service = get_assistant_service()
-            answer = await asyncio.to_thread(
-                service.chat,
-                user_id=str(interaction.user.id),
-                channel_id=str(interaction.channel_id),
-                guild_id=str(interaction.guild_id) if interaction.guild_id else None,
-                message=input_text,
+            answer = await _run_personal_assistant_chat(
+                user_id=interaction.user.id,
+                channel_id=interaction.channel_id,
+                guild_id=interaction.guild_id,
+                input_text=input_text,
             )
             await interaction.followup.send(build_bot_response(answer))
         except Exception as error:
             logger.exception("Error running /%s command", command_name)
             await interaction.followup.send(build_error_response(error))
+
+    async def _ensure_authorized_interaction(interaction: discord.Interaction, command_name: str):
+        if _is_authorized_discord_user(interaction.user.id, allowed_user_id):
+            return True
+        warning_message = ACCESS_DENIED_MESSAGE
+        logger.warning("Unauthorized /%s attempt by user_id=%s", command_name, interaction.user.id)
+        if interaction.response.is_done():
+            await interaction.followup.send(warning_message, ephemeral=True)
+        else:
+            await interaction.response.send_message(warning_message, ephemeral=True)
+        return False
 
     async def _create_note_from_input(interaction: discord.Interaction, input_text: str):
         try:
@@ -304,6 +337,9 @@ def create_discord_client(project_logger=None):
         )
 
         async def on_submit(self, interaction: discord.Interaction):
+            if not _is_authorized_discord_user(interaction.user.id, allowed_user_id):
+                await interaction.response.send_message(ACCESS_DENIED_MESSAGE, ephemeral=True)
+                return
             await interaction.response.defer(thinking=True)
             await _create_note_from_input(interaction, str(self.note_text))
 
@@ -316,6 +352,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="tasks", description="Fetch tasks from Notion and summarize with GPT")
     async def tasks_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "tasks"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             tasks, summary = collect_tasks_and_summary(logger, n_days=n_days)
@@ -326,6 +364,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="add_task", description="Add a task to Notion using natural language")
     async def add_task_command(interaction: discord.Interaction, input_text: str):
+        if not await _ensure_authorized_interaction(interaction, "add_task"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             parsed_task = llm_api.parse_add_task_input(input_text, logger)
@@ -337,6 +377,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="note", description="Add a detailed note to Notion Notes")
     async def add_note_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "note"):
+            return
         try:
             await interaction.response.send_modal(NoteInputModal())
         except Exception as error:
@@ -348,6 +390,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="notes", description="List notes from 5 days back to 5 days ahead")
     async def notes_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "notes"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             notes = notion_connector.collect_notes_around_today(
@@ -362,6 +406,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="calendar", description="Summarize your calendar events for the next 7 days")
     async def calendar_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "calendar"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             events = calendar_connector.list_week_events(project_logger=logger)
@@ -373,6 +419,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="day", description="Summarize today's Notion tasks and calendar events")
     async def day_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "day"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             tasks = notion_connector.collect_tasks_from_control_panel(
@@ -390,6 +438,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="tomorrow", description="Summarize tomorrow's Notion tasks and calendar events")
     async def tomorrow_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "tomorrow"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             tasks = notion_connector.collect_tasks_from_control_panel(
@@ -407,6 +457,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="week", description="Summarize current week's Notion tasks and calendar events")
     async def week_command(interaction: discord.Interaction):
+        if not await _ensure_authorized_interaction(interaction, "week"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             week_start, week_end = _current_week_bounds()
@@ -426,6 +478,8 @@ def create_discord_client(project_logger=None):
 
     @tree.command(name="add_event", description="Add a calendar event using natural language")
     async def add_event_command(interaction: discord.Interaction, input_text: str):
+        if not await _ensure_authorized_interaction(interaction, "add_event"):
+            return
         await interaction.response.defer(thinking=True)
         try:
             parsed_event = llm_api.parse_add_event_input(input_text, logger)
@@ -461,6 +515,33 @@ def create_discord_client(project_logger=None):
             return
         await tree.sync()
         logger.info("Discord bot online as %s (global sync)", client.user)
+
+    @client.event
+    async def on_message(message):
+        if getattr(message.author, "bot", False):
+            return
+        if getattr(message, "guild", None) is not None:
+            return
+        if not _is_authorized_discord_user(getattr(message.author, "id", ""), allowed_user_id):
+            await message.channel.send(ACCESS_DENIED_MESSAGE)
+            return
+
+        input_text = str(getattr(message, "content", "")).strip()
+        if not input_text:
+            return
+
+        try:
+            async with message.channel.typing():
+                answer = await _run_personal_assistant_chat(
+                    user_id=message.author.id,
+                    channel_id=message.channel.id,
+                    guild_id=None,
+                    input_text=input_text,
+                )
+            await message.channel.send(build_bot_response(answer))
+        except Exception as error:
+            logger.exception("Error running DM assistant flow")
+            await message.channel.send(build_error_response(error))
 
     return client
 

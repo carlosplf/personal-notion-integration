@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import unittest.mock
 import datetime
 
 sys.modules.setdefault("discord", types.SimpleNamespace())
@@ -113,6 +114,16 @@ class TestDiscordBot(unittest.TestCase):
         self.assertEqual(payload["note_name"], "Minha nota")
         self.assertEqual(payload["tag"], "GENERAL")
         self.assertEqual(payload["observations"], markdown)
+
+    def test_is_authorized_discord_user_denies_when_unset(self):
+        self.assertFalse(discord_bot._is_authorized_discord_user("123", ""))
+
+    def test_is_authorized_discord_user_matches_only_allowed_id(self):
+        self.assertTrue(discord_bot._is_authorized_discord_user("123", "123"))
+        self.assertFalse(discord_bot._is_authorized_discord_user("999", "123"))
+
+    def test_access_denied_message_is_defined(self):
+        self.assertIn("Access denied", discord_bot.ACCESS_DENIED_MESSAGE)
 
     def test_build_bot_response_truncates_long_text(self):
         message = discord_bot.build_bot_response("b" * 5000)
