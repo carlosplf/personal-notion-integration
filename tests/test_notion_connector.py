@@ -82,6 +82,7 @@ class TestNotionConnector(unittest.TestCase):
         )
 
         self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["id"], "task-1")
         self.assertEqual(tasks[0]["name"], "Minha tarefa")
         self.assertEqual(tasks[0]["deadline"], "2026-03-01T10:00:00.000Z")
         self.assertEqual(tasks[0]["project"], "Projeto X")
@@ -321,6 +322,7 @@ class TestNotionConnector(unittest.TestCase):
             )
 
         self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["id"], "note-1")
         self.assertEqual(notes[0]["name"], "Daily insight")
         self.assertEqual(notes[0]["tags"], ["IDEA"])
         self.assertEqual(notes[0]["observations"], "Review weekly goals")
@@ -441,7 +443,7 @@ class TestNotionConnector(unittest.TestCase):
         result = notion_connector.update_notion_page(
             {
                 "item_type": "card",
-                "page_id": "card-page",
+                "page_id": "12345678-1234-1234-1234-1234567890ac",
                 "note_name": "Novo card",
                 "tag": "IDEA",
                 "date": "2026-03-12",
@@ -458,6 +460,90 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(payload["Date"]["date"]["start"], "2026-03-12")
         self.assertEqual(payload["URL"]["url"], "https://example.com")
         self.assertTrue(payload["Observações"]["rich_text"])
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_notion_page_rejects_invalid_page_id(self, mock_load_credentials, mock_get):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+
+        with self.assertRaises(ValueError):
+            notion_connector.update_notion_page(
+                {
+                    "item_type": "task",
+                    "page_id": "Mandar mensagem para Latina",
+                    "done": True,
+                },
+                project_logger=_MockLogger(),
+            )
+
+        mock_get.assert_not_called()
+
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_notion_page_appends_content_blocks(self, mock_load_credentials, mock_get, mock_patch):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "id": "task-page",
+                "url": "https://notion.so/task-page",
+                "properties": {"Task": {"type": "title"}},
+            }
+        )
+        mock_patch.return_value = _MockResponse({"id": "task-page", "url": "https://notion.so/task-page"})
+
+        result = notion_connector.update_notion_page(
+            {
+                "item_type": "task",
+                "page_id": "12345678-1234-1234-1234-1234567890ab",
+                "content": "# Atualização\n- item",
+            },
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(result["id"], "task-page")
+        self.assertEqual(mock_patch.call_count, 1)
+        self.assertIn("/blocks/12345678-1234-1234-1234-1234567890ab/children", mock_patch.call_args.args[0])
+        children = mock_patch.call_args.kwargs["json"]["children"]
+        self.assertTrue(children)
+
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_notion_page_replaces_existing_content_blocks(self, mock_load_credentials, mock_get, mock_patch):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.side_effect = [
+            _MockResponse(
+                {
+                    "id": "task-page",
+                    "url": "https://notion.so/task-page",
+                    "properties": {"Task": {"type": "title"}},
+                }
+            ),
+            _MockResponse(
+                {
+                    "results": [{"id": "block-1"}, {"id": "block-2"}],
+                    "has_more": False,
+                    "next_cursor": None,
+                }
+            ),
+        ]
+        mock_patch.return_value = _MockResponse({"id": "task-page", "url": "https://notion.so/task-page"})
+
+        notion_connector.update_notion_page(
+            {
+                "item_type": "task",
+                "page_id": "12345678-1234-1234-1234-1234567890ab",
+                "content": "conteúdo novo",
+                "content_mode": "replace",
+            },
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(mock_patch.call_count, 3)
+        self.assertIn("/blocks/block-1", mock_patch.call_args_list[0].args[0])
+        self.assertIn("/blocks/block-2", mock_patch.call_args_list[1].args[0])
+        self.assertIn("/blocks/12345678-1234-1234-1234-1234567890ab/children", mock_patch.call_args_list[2].args[0])
 
 
 if __name__ == "__main__":

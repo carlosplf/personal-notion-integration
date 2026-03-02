@@ -243,6 +243,44 @@ class TestAssistantTools(unittest.TestCase):
                 _build_context(),
             )
 
+    @patch("assistant_connector.tools.notion_tools.notion_connector.update_notion_page")
+    def test_edit_notion_item_ignores_empty_task_fields(self, mock_update_page):
+        mock_update_page.return_value = {"id": "task-1", "updated_fields": ["done"]}
+
+        result = notion_tools.edit_notion_item(
+            {
+                "item_type": "task",
+                "page_id": "task-id",
+                "task_name": "   ",
+                "due_date": "",
+                "done": True,
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["id"], "task-1")
+        payload = mock_update_page.call_args.args[0]
+        self.assertEqual(payload, {"item_type": "task", "page_id": "task-id", "done": True})
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.update_notion_page")
+    def test_edit_notion_item_accepts_page_content_update(self, mock_update_page):
+        mock_update_page.return_value = {"id": "task-1", "updated_fields": ["content"]}
+
+        result = notion_tools.edit_notion_item(
+            {
+                "item_type": "task",
+                "page_id": "task-id",
+                "content": "# Novo conteúdo\n\n- item",
+                "content_mode": "replace",
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["id"], "task-1")
+        payload = mock_update_page.call_args.args[0]
+        self.assertEqual(payload["content_mode"], "replace")
+        self.assertIn("Novo conteúdo", payload["content"])
+
     @patch("assistant_connector.tools.calendar_tools.calendar_connector.list_week_events")
     def test_list_calendar_events_clamps_max_results(self, mock_list_events):
         mock_list_events.return_value = [{"id": "1"}]

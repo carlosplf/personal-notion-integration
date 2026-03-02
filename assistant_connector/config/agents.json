@@ -151,7 +151,7 @@
     },
     {
       "name": "edit_notion_item",
-      "description": "Edita uma tarefa (task) ou card no Notion usando o ID da página.",
+      "description": "Edita uma tarefa (task) ou card no Notion usando o ID da página retornado pelas tools de listagem.",
       "handler": "assistant_connector.tools.notion_tools:edit_notion_item",
       "write_operation": true,
       "input_schema": {
@@ -211,6 +211,18 @@
           "date": {
             "type": "string",
             "description": "Nova data do card no formato YYYY-MM-DD (item_type=card)."
+          },
+          "content": {
+            "type": "string",
+            "description": "Conteúdo textual da página para atualizar os blocos (Markdown simples suportado)."
+          },
+          "content_mode": {
+            "type": "string",
+            "description": "Modo de atualização do conteúdo: append adiciona ao final; replace substitui todo o conteúdo atual.",
+            "enum": [
+              "append",
+              "replace"
+            ]
           },
           "confirmed": {
             "type": "boolean",

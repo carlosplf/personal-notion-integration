@@ -118,6 +118,8 @@ def collect_tasks_from_control_panel(n_days=0, project_logger=None):
 
             all_task_data.append(
                 {
+                    "id": task.get("id"),
+                    "page_url": task.get("url"),
                     "name": task_title[0].get("plain_text") or task_title[0]["text"]["content"],
                     "deadline": deadline["start"],
                     "project": project["name"] if project else "No project",
@@ -218,6 +220,42 @@ def _find_property_name(properties, preferred_names, accepted_types):
     return None, None
 
 
+def _collect_page_block_ids(page_id, headers):
+    block_ids = []
+    next_cursor = None
+    has_more = True
+    while has_more:
+        params = {"page_size": 100}
+        if next_cursor:
+            params["start_cursor"] = next_cursor
+        response = requests.get(
+            f"https://api.notion.com/v1/blocks/{page_id}/children",
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        for block in payload.get("results", []):
+            block_id = block.get("id")
+            if block_id:
+                block_ids.append(block_id)
+        has_more = bool(payload.get("has_more"))
+        next_cursor = payload.get("next_cursor")
+    return block_ids
+
+
+def _replace_page_content(page_id, headers):
+    for block_id in _collect_page_block_ids(page_id, headers):
+        archive_response = requests.patch(
+            f"https://api.notion.com/v1/blocks/{block_id}",
+            json={"archived": True},
+            headers=headers,
+            timeout=30,
+        )
+        archive_response.raise_for_status()
+
+
 def update_notion_page(page_data, project_logger=None):
     project_logger = project_logger or logging.getLogger(__name__)
     notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
@@ -229,6 +267,11 @@ def update_notion_page(page_data, project_logger=None):
     page_id = _normalize_notion_object_id(page_data.get("page_id"))
     if not page_id:
         raise ValueError("page_id is required")
+    if not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        page_id,
+    ):
+        raise ValueError("page_id must be a Notion page ID or URL containing a valid page ID")
 
     headers = {
         "accept": "application/json",
@@ -249,6 +292,14 @@ def update_notion_page(page_data, project_logger=None):
 
     updates = {}
     updated_fields = []
+    content = None
+    if "content" in page_data:
+        raw_content = str(page_data.get("content", ""))
+        if raw_content.strip():
+            content = raw_content
+    content_mode = str(page_data.get("content_mode", "append")).strip().lower() or "append"
+    if content_mode not in {"append", "replace"}:
+        raise ValueError("content_mode must be 'append' or 'replace'")
 
     if item_type == "task":
         if "task_name" in page_data:
@@ -340,17 +391,33 @@ def update_notion_page(page_data, project_logger=None):
             updates[date_property] = {"date": {"start": page_data.get("date")}}
             updated_fields.append("date")
 
-    if not updates:
+    if not updates and content is None:
         raise ValueError("No fields to update")
 
-    response = requests.patch(
-        f"https://api.notion.com/v1/pages/{page_id}",
-        json={"properties": updates},
-        headers=headers,
-        timeout=30,
-    )
-    response.raise_for_status()
-    result = response.json()
+    result = page_payload
+    if updates:
+        response = requests.patch(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            json={"properties": updates},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+    if content is not None:
+        if content_mode == "replace":
+            _replace_page_content(page_id, headers)
+        children = _build_note_children(content)
+        append_response = requests.patch(
+            f"https://api.notion.com/v1/blocks/{page_id}/children",
+            json={"children": children},
+            headers=headers,
+            timeout=30,
+        )
+        append_response.raise_for_status()
+        updated_fields.append("content")
+
     return {
         "id": result.get("id"),
         "page_url": result.get("url"),
@@ -972,6 +1039,7 @@ def collect_notes_around_today(days_back=5, days_forward=5, project_logger=None)
 
             all_notes.append(
                 {
+                    "id": note.get("id"),
                     "name": (
                         (note_title[0].get("plain_text") or note_title[0].get("text", {}).get("content"))
                         if note_title else "Untitled note"

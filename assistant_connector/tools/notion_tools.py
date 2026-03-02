@@ -98,23 +98,40 @@ def edit_notion_item(arguments, context):
         "item_type": item_type,
         "page_id": page_id,
     }
+    content = None
+    if "content" in arguments:
+        raw_content = str(arguments.get("content", ""))
+        if raw_content.strip():
+            content = raw_content
+            payload["content"] = raw_content
+    if "content_mode" in arguments and content is not None:
+        content_mode = str(arguments.get("content_mode", "")).strip().lower()
+        if content_mode and content_mode not in {"append", "replace"}:
+            raise ValueError("content_mode must be 'append' or 'replace'")
+        if content_mode:
+            payload["content_mode"] = content_mode
+
     if item_type == "task":
         if "task_name" in arguments:
             task_name = str(arguments.get("task_name", "")).strip()
-            if not task_name:
-                raise ValueError("task_name cannot be empty")
-            payload["task_name"] = task_name
+            if task_name:
+                payload["task_name"] = task_name
         if "due_date" in arguments:
             due_date = str(arguments.get("due_date", "")).strip()
-            datetime.date.fromisoformat(due_date)
-            payload["due_date"] = due_date
+            if due_date:
+                datetime.date.fromisoformat(due_date)
+                payload["due_date"] = due_date
         if "project" in arguments:
-            payload["project"] = str(arguments.get("project", "")).strip()
+            project = str(arguments.get("project", "")).strip()
+            if project:
+                payload["project"] = project
         if "tags" in arguments:
             tags = arguments.get("tags", [])
             if not isinstance(tags, list):
                 raise ValueError("tags must be a list")
-            payload["tags"] = [str(tag).strip() for tag in tags if str(tag).strip()]
+            clean_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+            if clean_tags:
+                payload["tags"] = clean_tags
         if "done" in arguments:
             payload["done"] = bool(arguments.get("done"))
         if set(payload.keys()) == {"item_type", "page_id"}:
@@ -122,19 +139,25 @@ def edit_notion_item(arguments, context):
     else:
         if "note_name" in arguments:
             note_name = str(arguments.get("note_name", "")).strip()
-            if not note_name:
-                raise ValueError("note_name cannot be empty")
-            payload["note_name"] = note_name
+            if note_name:
+                payload["note_name"] = note_name
         if "tag" in arguments:
-            payload["tag"] = str(arguments.get("tag", "")).strip()
+            tag = str(arguments.get("tag", "")).strip()
+            if tag:
+                payload["tag"] = tag
         if "observations" in arguments:
-            payload["observations"] = str(arguments.get("observations", ""))
+            observations = str(arguments.get("observations", ""))
+            if observations.strip():
+                payload["observations"] = observations
         if "url" in arguments:
-            payload["url"] = str(arguments.get("url", "")).strip()
+            url = str(arguments.get("url", "")).strip()
+            if url:
+                payload["url"] = url
         if "date" in arguments:
             date_value = str(arguments.get("date", "")).strip()
-            datetime.date.fromisoformat(date_value)
-            payload["date"] = date_value
+            if date_value:
+                datetime.date.fromisoformat(date_value)
+                payload["date"] = date_value
         if set(payload.keys()) == {"item_type", "page_id"}:
             raise ValueError("At least one card field is required")
 
