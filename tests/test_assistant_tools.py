@@ -1,9 +1,17 @@
 import unittest
 import os
+import tempfile
 from unittest.mock import patch
 
 from assistant_connector.models import AgentDefinition, ToolExecutionContext
-from assistant_connector.tools import calendar_tools, email_tools, meta_tools, news_tools, notion_tools
+from assistant_connector.tools import (
+    calendar_tools,
+    contacts_tools,
+    email_tools,
+    meta_tools,
+    news_tools,
+    notion_tools,
+)
 
 
 class _FakeLogger:
@@ -389,6 +397,34 @@ class TestAssistantTools(unittest.TestCase):
                 {"subject": "abc", "body": "conteúdo"},
                 _build_context(),
             )
+
+    def test_search_contacts_filters_by_query(self):
+        csv_content = (
+            "Nome, email, telefone, relacionamento\n"
+            "Maria,maria@example.com,11999990000,amiga\n"
+            "Joao,joao@example.com,21988887777,trabalho\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = os.path.join(temp_dir, "contacts.csv")
+            with open(csv_path, "w", encoding="utf-8") as csv_file:
+                csv_file.write(csv_content)
+
+            with patch("assistant_connector.tools.contacts_tools.CONTACTS_CSV_PATH", csv_path):
+                result = contacts_tools.search_contacts({"query": "maria"}, _build_context())
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["contacts"][0]["email"], "maria@example.com")
+
+    def test_search_contacts_raises_for_missing_required_column(self):
+        csv_content = "Nome,email,telefone\nMaria,maria@example.com,11999990000\n"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = os.path.join(temp_dir, "contacts.csv")
+            with open(csv_path, "w", encoding="utf-8") as csv_file:
+                csv_file.write(csv_content)
+
+            with patch("assistant_connector.tools.contacts_tools.CONTACTS_CSV_PATH", csv_path):
+                with self.assertRaises(ValueError):
+                    contacts_tools.search_contacts({"query": "maria"}, _build_context())
 
 
 if __name__ == "__main__":

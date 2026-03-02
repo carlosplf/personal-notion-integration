@@ -328,6 +328,28 @@
       }
     },
     {
+      "name": "search_contacts",
+      "description": "Busca contatos em /memories/contacts.csv por nome, email, telefone ou relacionamento.",
+      "handler": "assistant_connector.tools.contacts_tools:search_contacts",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Texto para busca parcial (case-insensitive). Se vazio, retorna lista completa."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de contatos retornados.",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "send_email",
       "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
       "handler": "assistant_connector.tools.email_tools:send_email",
@@ -388,6 +410,7 @@
         "list_calendar_events",
         "create_calendar_event",
         "list_tech_news",
+        "search_contacts",
         "send_email"
       ]
     }
