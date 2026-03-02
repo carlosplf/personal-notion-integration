@@ -16,6 +16,10 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("create_notion_note", agent.tools)
         self.assertIn("edit_notion_item", agent.tools)
         self.assertIn("list_tech_news", agent.tools)
+        self.assertIn("search_emails", agent.tools)
+        self.assertIn("read_email", agent.tools)
+        self.assertIn("search_email_attachments", agent.tools)
+        self.assertIn("analyze_email_attachment", agent.tools)
 
     def test_write_tools_flagged_as_write_operations(self):
         configuration = load_assistant_configuration()

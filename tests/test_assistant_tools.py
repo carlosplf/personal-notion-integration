@@ -398,6 +398,60 @@ class TestAssistantTools(unittest.TestCase):
                 _build_context(),
             )
 
+    @patch("assistant_connector.tools.email_tools.gmail_connector.search_emails")
+    def test_search_emails_passes_filters(self, mock_search_emails):
+        mock_search_emails.return_value = {"returned": 0, "emails": []}
+
+        email_tools.search_emails(
+            {"query": "from:ana@example.com", "max_results": 5, "include_body": True},
+            _build_context(),
+        )
+
+        kwargs = mock_search_emails.call_args.kwargs
+        self.assertEqual(kwargs["query"], "from:ana@example.com")
+        self.assertEqual(kwargs["max_results"], 5)
+        self.assertTrue(kwargs["include_body"])
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.read_email")
+    def test_read_email_requires_message_id(self, mock_read_email):
+        mock_read_email.return_value = {"id": "m1"}
+
+        with self.assertRaises(ValueError):
+            email_tools.read_email({}, _build_context())
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.search_email_attachments")
+    def test_search_email_attachments_passes_filters(self, mock_search_attachments):
+        mock_search_attachments.return_value = {"returned": 0, "attachments": []}
+
+        email_tools.search_email_attachments(
+            {"query": "from:ana@example.com", "filename_contains": ".pdf", "max_results": 8},
+            _build_context(),
+        )
+
+        kwargs = mock_search_attachments.call_args.kwargs
+        self.assertEqual(kwargs["query"], "from:ana@example.com")
+        self.assertEqual(kwargs["filename_contains"], ".pdf")
+        self.assertEqual(kwargs["max_results"], 8)
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.analyze_email_attachment")
+    def test_analyze_email_attachment_requires_attachment_selector(self, mock_analyze_attachment):
+        mock_analyze_attachment.return_value = {"content_preview": "ok"}
+
+        with self.assertRaises(ValueError):
+            email_tools.analyze_email_attachment(
+                {"message_id": "m1"},
+                _build_context(),
+            )
+
+        email_tools.analyze_email_attachment(
+            {"message_id": "m1", "attachment_id": "att-1", "max_chars": 900},
+            _build_context(),
+        )
+        kwargs = mock_analyze_attachment.call_args.kwargs
+        self.assertEqual(kwargs["message_id"], "m1")
+        self.assertEqual(kwargs["attachment_id"], "att-1")
+        self.assertEqual(kwargs["max_chars"], 900)
+
     def test_search_contacts_filters_by_query(self):
         csv_content = (
             "Nome, email, telefone, relacionamento\n"

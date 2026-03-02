@@ -40,6 +40,60 @@ def send_email(arguments, context):
     }
 
 
+def search_emails(arguments, context):
+    query = str(arguments.get("query", "")).strip()
+    max_results = _clamp_int(arguments.get("max_results", 10), minimum=1, maximum=50, default=10)
+    include_body = bool(arguments.get("include_body", False))
+    return gmail_connector.search_emails(
+        project_logger=context.project_logger,
+        query=query,
+        max_results=max_results,
+        include_body=include_body,
+    )
+
+
+def read_email(arguments, context):
+    message_id = str(arguments.get("message_id", "")).strip()
+    if not message_id:
+        raise ValueError("message_id is required")
+    include_body = bool(arguments.get("include_body", True))
+    return gmail_connector.read_email(
+        project_logger=context.project_logger,
+        message_id=message_id,
+        include_body=include_body,
+    )
+
+
+def search_email_attachments(arguments, context):
+    query = str(arguments.get("query", "")).strip()
+    filename_contains = str(arguments.get("filename_contains", "")).strip()
+    max_results = _clamp_int(arguments.get("max_results", 20), minimum=1, maximum=50, default=20)
+    return gmail_connector.search_email_attachments(
+        project_logger=context.project_logger,
+        query=query,
+        filename_contains=filename_contains,
+        max_results=max_results,
+    )
+
+
+def analyze_email_attachment(arguments, context):
+    message_id = str(arguments.get("message_id", "")).strip()
+    attachment_id = str(arguments.get("attachment_id", "")).strip()
+    filename = str(arguments.get("filename", "")).strip()
+    if not message_id:
+        raise ValueError("message_id is required")
+    if not attachment_id and not filename:
+        raise ValueError("attachment_id or filename is required")
+    max_chars = _clamp_int(arguments.get("max_chars", 8000), minimum=200, maximum=20000, default=8000)
+    return gmail_connector.analyze_email_attachment(
+        project_logger=context.project_logger,
+        message_id=message_id,
+        attachment_id=attachment_id or None,
+        filename=filename or None,
+        max_chars=max_chars,
+    )
+
+
 def _apply_subject_prefix(subject):
     prefix = str(os.getenv("EMAIL_ASSISTANT_SUBJECT_PREFIX", "")).strip()
     if not prefix:
@@ -62,3 +116,11 @@ def _get_email_tone():
 
 def _get_email_signature():
     return str(os.getenv("EMAIL_ASSISTANT_SIGNATURE", "")).strip()
+
+
+def _clamp_int(value, *, minimum, maximum, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))

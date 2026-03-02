@@ -932,6 +932,7 @@ class TestAssistantRuntime(unittest.TestCase):
 
         system_message = runtime._openai_client.responses.calls[0]["input"][0]["content"]
         self.assertIn("Sempre responda em Markdown", system_message)
+        self.assertIn("não ultrapasse 1800", system_message)
 
     def test_runtime_injects_email_style_preferences_when_available(self):
         payloads = [{"id": "resp-1", "output": [], "output_text": "ok"}]

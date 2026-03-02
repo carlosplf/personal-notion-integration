@@ -2,6 +2,7 @@ import sys
 import types
 import unittest
 import unittest.mock
+import asyncio
 import datetime
 
 sys.modules.setdefault("discord", types.SimpleNamespace())
@@ -142,10 +143,9 @@ class TestDiscordBot(unittest.TestCase):
         selected = discord_bot._select_audio_attachment(attachments)
         self.assertEqual(selected.filename, "voice.ogg")
 
-    def test_build_bot_response_truncates_long_text(self):
+    def test_build_bot_response_preserves_long_text_for_chunking(self):
         message = discord_bot.build_bot_response("b" * 5000)
-        self.assertLessEqual(len(message), discord_bot.MAX_DISCORD_MESSAGE_LENGTH)
-        self.assertTrue(message.endswith("..."))
+        self.assertGreater(len(message), discord_bot.MAX_DISCORD_MESSAGE_LENGTH)
 
     def test_build_bot_response_wraps_plain_text_in_markdown(self):
         message = discord_bot.build_bot_response("Resposta simples")
@@ -156,6 +156,22 @@ class TestDiscordBot(unittest.TestCase):
         markdown_answer = "## Resumo\n\n- Item 1"
         message = discord_bot.build_bot_response(markdown_answer)
         self.assertEqual(message, markdown_answer)
+
+    def test_split_discord_message_chunks_respects_chunk_target(self):
+        text = ("paragrafo " * 400).strip()
+        chunks = discord_bot._split_discord_message_chunks(text, chunk_size=200)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 200 for chunk in chunks))
+
+    def test_send_discord_text_sends_multiple_messages(self):
+        sent_chunks = []
+
+        async def _fake_send(content, **_kwargs):
+            sent_chunks.append(content)
+
+        asyncio.run(discord_bot._send_discord_text(_fake_send, "x" * 5000))
+        self.assertGreater(len(sent_chunks), 1)
+        self.assertTrue(all(len(chunk) <= discord_bot.DISCORD_CHUNK_TARGET for chunk in sent_chunks))
 
     def test_build_new_chat_response(self):
         message = discord_bot.build_new_chat_response()

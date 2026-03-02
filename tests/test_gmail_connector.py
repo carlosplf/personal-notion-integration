@@ -1,6 +1,7 @@
 import unittest
 import os
 import json
+import base64
 import tempfile
 from unittest.mock import patch
 
@@ -20,6 +21,41 @@ class _FakeSendExecute:
         return {"id": "gmail-msg-1", "threadId": "thread-1"}
 
 
+class _FakeExecute:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+class _FakeMessagesServiceWithReads:
+    def __init__(self, payloads, attachment_payloads=None):
+        self._payloads = payloads
+        self._attachments = _FakeAttachmentsService(attachment_payloads or {})
+
+    def list(self, **_kwargs):
+        return _FakeExecute({"messages": [{"id": key} for key in self._payloads]})
+
+    def get(self, **kwargs):
+        message_id = kwargs["id"]
+        return _FakeExecute(self._payloads[message_id])
+
+    def send(self, **_kwargs):
+        return _FakeSendExecute()
+
+    def attachments(self):
+        return self._attachments
+
+
+class _FakeAttachmentsService:
+    def __init__(self, attachment_payloads):
+        self._attachment_payloads = attachment_payloads
+
+    def get(self, **kwargs):
+        return _FakeExecute(self._attachment_payloads[kwargs["id"]])
+
+
 class _FakeMessagesService:
     def send(self, **_kwargs):
         return _FakeSendExecute()
@@ -33,6 +69,22 @@ class _FakeUsersService:
 class _FakeGmailService:
     def users(self):
         return _FakeUsersService()
+
+
+class _FakeUsersServiceWithReads:
+    def __init__(self, payloads, attachment_payloads=None):
+        self._messages = _FakeMessagesServiceWithReads(payloads, attachment_payloads)
+
+    def messages(self):
+        return self._messages
+
+
+class _FakeGmailServiceWithReads:
+    def __init__(self, payloads, attachment_payloads=None):
+        self._users = _FakeUsersServiceWithReads(payloads, attachment_payloads)
+
+    def users(self):
+        return self._users
 
 
 class TestGmailConnector(unittest.TestCase):
@@ -114,6 +166,216 @@ class TestGmailConnector(unittest.TestCase):
             with open(temp_token.name, "r", encoding="utf-8") as token_file:
                 saved = json.load(token_file)
             self.assertEqual(saved["refresh_token"], "abc")
+
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_search_emails_returns_normalized_metadata(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+    ):
+        payloads = {
+            "m1": {
+                "id": "m1",
+                "threadId": "t1",
+                "snippet": "hello",
+                "payload": {
+                    "headers": [
+                        {"name": "From", "value": "a@example.com"},
+                        {"name": "To", "value": "b@example.com"},
+                        {"name": "Subject", "value": "Assunto"},
+                        {"name": "Date", "value": "Mon"},
+                    ]
+                },
+            }
+        }
+        mock_from_authorized_user_file.return_value = object()
+        mock_build.return_value = _FakeGmailServiceWithReads(payloads)
+
+        result = gmail_connector.search_emails(
+            project_logger=_MockLogger(),
+            query="from:a@example.com",
+            max_results=5,
+        )
+
+        self.assertEqual(result["returned"], 1)
+        self.assertEqual(result["emails"][0]["id"], "m1")
+        self.assertEqual(result["emails"][0]["subject"], "Assunto")
+
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_read_email_includes_attachments(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+    ):
+        payloads = {
+            "m2": {
+                "id": "m2",
+                "threadId": "t2",
+                "snippet": "anexo",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "Com anexo"},
+                    ],
+                    "parts": [
+                        {
+                            "filename": "invoice.pdf",
+                            "mimeType": "application/pdf",
+                            "body": {"attachmentId": "att-1", "size": 321},
+                        }
+                    ],
+                },
+            }
+        }
+        mock_from_authorized_user_file.return_value = object()
+        mock_build.return_value = _FakeGmailServiceWithReads(payloads)
+
+        result = gmail_connector.read_email(
+            project_logger=_MockLogger(),
+            message_id="m2",
+            include_body=False,
+        )
+
+        self.assertEqual(result["id"], "m2")
+        self.assertEqual(result["attachments"][0]["filename"], "invoice.pdf")
+        self.assertEqual(result["attachments"][0]["attachment_id"], "att-1")
+
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_search_email_attachments_filters_filename(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+    ):
+        payloads = {
+            "m3": {
+                "id": "m3",
+                "threadId": "t3",
+                "snippet": "docs",
+                "payload": {
+                    "headers": [{"name": "Subject", "value": "Docs"}],
+                    "parts": [
+                        {
+                            "filename": "report.xlsx",
+                            "mimeType": "application/vnd.ms-excel",
+                            "body": {"attachmentId": "att-2", "size": 456},
+                        },
+                        {
+                            "filename": "notes.txt",
+                            "mimeType": "text/plain",
+                            "body": {"attachmentId": "att-3", "size": 78},
+                        },
+                    ],
+                },
+            }
+        }
+        mock_from_authorized_user_file.return_value = object()
+        mock_build.return_value = _FakeGmailServiceWithReads(payloads)
+
+        result = gmail_connector.search_email_attachments(
+            project_logger=_MockLogger(),
+            query="subject:Docs",
+            filename_contains=".xlsx",
+            max_results=10,
+        )
+
+        self.assertEqual(result["returned"], 1)
+        self.assertEqual(result["attachments"][0]["filename"], "report.xlsx")
+
+    @patch("gmail_connector.gmail_connector._extract_attachment_text")
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_analyze_email_attachment_downloads_and_extracts(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+        mock_extract_attachment_text,
+    ):
+        payloads = {
+            "m4": {
+                "id": "m4",
+                "threadId": "t4",
+                "payload": {
+                    "parts": [
+                        {
+                            "filename": "documento.pdf",
+                            "mimeType": "application/pdf",
+                            "body": {"attachmentId": "att-44", "size": 12},
+                        }
+                    ]
+                },
+            }
+        }
+        encoded_payload = base64.urlsafe_b64encode(b"fake-pdf").decode()
+        mock_from_authorized_user_file.return_value = object()
+        mock_build.return_value = _FakeGmailServiceWithReads(
+            payloads,
+            {"att-44": {"data": encoded_payload}},
+        )
+        mock_extract_attachment_text.return_value = "texto extraido"
+
+        result = gmail_connector.analyze_email_attachment(
+            project_logger=_MockLogger(),
+            message_id="m4",
+            attachment_id="att-44",
+            max_chars=1000,
+        )
+
+        self.assertEqual(result["attachment_id"], "att-44")
+        self.assertEqual(result["content_preview"], "texto extraido")
+        self.assertFalse(result["truncated"])
+
+    @patch("gmail_connector.gmail_connector._extract_docx_text")
+    def test_extract_attachment_text_accepts_docx_mime_with_parameters(self, mock_extract_docx_text):
+        mock_extract_docx_text.return_value = "conteudo docx"
+
+        extracted = gmail_connector._extract_attachment_text(
+            b"fake-docx-bytes",
+            filename="",
+            mime_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="plano.docx"',
+        )
+
+        self.assertEqual(extracted, "conteudo docx")
+
+    @patch("gmail_connector.gmail_connector._extract_attachment_text")
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_analyze_email_attachment_reads_inline_attachment_data(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+        mock_extract_attachment_text,
+    ):
+        inline_data = base64.urlsafe_b64encode(b"inline-docx").decode()
+        payloads = {
+            "m5": {
+                "id": "m5",
+                "threadId": "t5",
+                "payload": {
+                    "parts": [
+                        {
+                            "filename": "Plano Analise.docx",
+                            "mimeType": "application/octet-stream",
+                            "body": {"data": inline_data, "size": 22},
+                        }
+                    ]
+                },
+            }
+        }
+        mock_from_authorized_user_file.return_value = object()
+        mock_build.return_value = _FakeGmailServiceWithReads(payloads, {})
+        mock_extract_attachment_text.return_value = "resumo inline"
+
+        result = gmail_connector.analyze_email_attachment(
+            project_logger=_MockLogger(),
+            message_id="m5",
+            filename="plano",
+            max_chars=1000,
+        )
+
+        self.assertEqual(result["filename"], "Plano Analise.docx")
+        self.assertEqual(result["content_preview"], "resumo inline")
 
 
 if __name__ == "__main__":

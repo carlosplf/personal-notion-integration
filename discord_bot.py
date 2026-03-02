@@ -13,6 +13,7 @@ from task_summary_flow import collect_tasks_and_summary
 from utils import create_logger
 
 MAX_DISCORD_MESSAGE_LENGTH = 2000
+DISCORD_CHUNK_TARGET = 1800
 ACCESS_DENIED_MESSAGE = (
     "🔒 Access denied: this assistant is restricted to an authorized Discord user."
 )
@@ -32,6 +33,38 @@ def _truncate_text(text, limit):
     if len(text) <= limit:
         return text
     return f"{text[:limit - 3]}..."
+
+
+def _split_discord_message_chunks(text, chunk_size=DISCORD_CHUNK_TARGET):
+    clean_text = str(text or "")
+    if len(clean_text) <= chunk_size:
+        return [clean_text]
+
+    chunks = []
+    remaining = clean_text
+    while len(remaining) > chunk_size:
+        split_idx = remaining.rfind("\n\n", 0, chunk_size)
+        if split_idx <= 0:
+            split_idx = remaining.rfind("\n", 0, chunk_size)
+        if split_idx <= 0:
+            split_idx = remaining.rfind(" ", 0, chunk_size)
+        if split_idx <= 0:
+            split_idx = chunk_size
+        chunk = remaining[:split_idx].strip()
+        if not chunk:
+            chunk = remaining[:chunk_size]
+            split_idx = chunk_size
+        chunks.append(chunk)
+        remaining = remaining[split_idx:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+async def _send_discord_text(send_callable, text, **send_kwargs):
+    chunks = _split_discord_message_chunks(text)
+    for chunk in chunks:
+        await send_callable(chunk, **send_kwargs)
 
 
 def build_tasks_response(tasks, summary):
@@ -287,7 +320,7 @@ def _ensure_markdown_response(text):
 
 def build_bot_response(answer):
     content = _ensure_markdown_response(answer)
-    return _truncate_text(content, MAX_DISCORD_MESSAGE_LENGTH)
+    return content
 
 def build_new_chat_response():
     return "## Nova conversa iniciada\n\nPronto. Limpei o histórico deste chat e vou responder sem contexto anterior."
@@ -335,7 +368,7 @@ def create_discord_client(project_logger=None):
                 guild_id=interaction.guild_id,
                 input_text=input_text,
             )
-            await interaction.followup.send(build_bot_response(answer))
+            await _send_discord_text(interaction.followup.send, build_bot_response(answer))
         except Exception as error:
             logger.exception("Error running /%s command", command_name)
             await interaction.followup.send(build_error_response(error))
@@ -464,7 +497,7 @@ def create_discord_client(project_logger=None):
             today_tasks = filter_tasks_for_today(tasks)
             today_events = filter_events_for_today(events)
             summary = llm_api.summarize_day_context(today_tasks, today_events, logger)
-            await interaction.followup.send(build_bot_response(summary))
+            await _send_discord_text(interaction.followup.send, build_bot_response(summary))
         except Exception as error:
             logger.exception("Error running /day command")
             await interaction.followup.send(build_error_response(error))
@@ -483,7 +516,7 @@ def create_discord_client(project_logger=None):
             tomorrow_tasks = filter_tasks_for_tomorrow(tasks)
             tomorrow_events = filter_events_for_tomorrow(events)
             summary = llm_api.summarize_period_context("amanhã", tomorrow_tasks, tomorrow_events, logger)
-            await interaction.followup.send(build_bot_response(summary))
+            await _send_discord_text(interaction.followup.send, build_bot_response(summary))
         except Exception as error:
             logger.exception("Error running /tomorrow command")
             await interaction.followup.send(build_error_response(error))
@@ -504,7 +537,7 @@ def create_discord_client(project_logger=None):
             week_tasks = filter_tasks_for_current_week(tasks)
             week_events = filter_events_for_current_week(events)
             summary = llm_api.summarize_period_context("semana atual", week_tasks, week_events, logger)
-            await interaction.followup.send(build_bot_response(summary))
+            await _send_discord_text(interaction.followup.send, build_bot_response(summary))
         except Exception as error:
             logger.exception("Error running /week command")
             await interaction.followup.send(build_error_response(error))
@@ -637,7 +670,7 @@ def create_discord_client(project_logger=None):
                     guild_id=None,
                     input_text=input_text,
                 )
-            await message.channel.send(build_bot_response(answer))
+            await _send_discord_text(message.channel.send, build_bot_response(answer))
         except Exception as error:
             logger.exception("Error running DM assistant flow")
             await message.channel.send(build_error_response(error))

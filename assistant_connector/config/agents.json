@@ -350,6 +350,114 @@
       }
     },
     {
+      "name": "search_emails",
+      "description": "Busca emails no Gmail por query, remetente, assunto ou outros filtros da sintaxe Gmail.",
+      "handler": "assistant_connector.tools.email_tools:search_emails",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query de busca Gmail (ex.: from:pessoa@exemplo.com subject:projeto)."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Máximo de emails retornados.",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "include_body": {
+            "type": "boolean",
+            "description": "Quando true, inclui corpo textual do email retornado."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_email",
+      "description": "Lê um email específico pelo message_id.",
+      "handler": "assistant_connector.tools.email_tools:read_email",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "description": "ID da mensagem no Gmail."
+          },
+          "include_body": {
+            "type": "boolean",
+            "description": "Quando true, inclui corpo textual do email."
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search_email_attachments",
+      "description": "Busca anexos em emails e retorna metadados (arquivo, tipo e tamanho).",
+      "handler": "assistant_connector.tools.email_tools:search_email_attachments",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Query Gmail para restringir mensagens com anexos."
+          },
+          "filename_contains": {
+            "type": "string",
+            "description": "Filtro opcional por trecho do nome do arquivo."
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Máximo de emails analisados para encontrar anexos.",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "analyze_email_attachment",
+      "description": "Baixa e extrai o conteúdo textual de um anexo de email (PDF, planilhas XLSX e documentos de texto).",
+      "handler": "assistant_connector.tools.email_tools:analyze_email_attachment",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "description": "ID da mensagem no Gmail."
+          },
+          "attachment_id": {
+            "type": "string",
+            "description": "ID do anexo retornado por search_email_attachments."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Nome do arquivo do anexo (alternativa ao attachment_id)."
+          },
+          "max_chars": {
+            "type": "integer",
+            "description": "Máximo de caracteres retornados no preview.",
+            "minimum": 200,
+            "maximum": 20000
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "send_email",
       "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
       "handler": "assistant_connector.tools.email_tools:send_email",
@@ -411,6 +519,10 @@
         "create_calendar_event",
         "list_tech_news",
         "search_contacts",
+        "search_emails",
+        "read_email",
+        "search_email_attachments",
+        "analyze_email_attachment",
         "send_email"
       ]
     }

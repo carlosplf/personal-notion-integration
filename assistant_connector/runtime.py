@@ -153,6 +153,7 @@ class AssistantRuntime:
             "- Sempre responda em Markdown.\n"
             "- Use título H2 no início (## ...).\n"
             "- Use listas para itens múltiplos e destaque com negrito quando útil.\n"
+            "- Mire em respostas com até 1500 caracteres e, sempre que possível, não ultrapasse 1800.\n"
             "- Nunca responda em JSON bruto.\n\n"
             f"{self._build_email_style_guidance()}"
         )
