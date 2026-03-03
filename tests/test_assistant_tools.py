@@ -204,6 +204,65 @@ class TestAssistantTools(unittest.TestCase):
                 _build_context(),
             )
 
+    @patch("assistant_connector.tools.notion_tools.notion_connector.create_expense_in_expenses_db")
+    def test_register_financial_expense_creates_expense_page(self, mock_create_expense):
+        mock_create_expense.return_value = {"id": "expense-1"}
+
+        result = notion_tools.register_financial_expense(
+            {"description": "Uber casa", "amount": 45.5, "expense_date": "2026-03-10"},
+            _build_context(),
+        )
+
+        self.assertEqual(result["status"], "created")
+        payload = mock_create_expense.call_args.args[0]
+        self.assertEqual(payload["name"], "Despesa 2026-03-10")
+        self.assertEqual(payload["date"], "2026-03-10")
+        self.assertEqual(payload["category"], "Transporte")
+        self.assertEqual(payload["amount"], 45.5)
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.create_expense_in_expenses_db")
+    def test_register_financial_expense_normalizes_category_aliases(self, mock_create_expense):
+        mock_create_expense.return_value = {"id": "expense-2"}
+
+        notion_tools.register_financial_expense(
+            {"description": "Consulta médica", "amount": 120, "category": "saude", "expense_date": "2026-03-11"},
+            _build_context(),
+        )
+
+        payload = mock_create_expense.call_args.args[0]
+        self.assertEqual(payload["category"], "Saúde")
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_expenses_from_expenses_db")
+    def test_analyze_monthly_expenses_returns_totals_breakdown_and_top_expense(self, mock_collect_expenses):
+        mock_collect_expenses.return_value = [
+            {
+                "id": "expense-1",
+                "date": "2026-03-02",
+                "amount": 50.00,
+                "category": "Transporte",
+                "description": "Uber ida",
+            },
+            {
+                "id": "expense-2",
+                "date": "2026-03-03",
+                "amount": 120.00,
+                "category": "Alimentação",
+                "description": "Mercado",
+            }
+        ]
+
+        result = notion_tools.analyze_monthly_expenses({"month": "2026-03"}, _build_context())
+
+        self.assertEqual(result["month"], "2026-03")
+        self.assertEqual(result["total_spent"], 170.0)
+        self.assertEqual(result["expenses_count"], 2)
+        self.assertEqual(result["breakdown_by_category"][0]["category"], "Alimentação")
+        self.assertEqual(result["top_expense"]["amount"], 120.0)
+
+    def test_analyze_monthly_expenses_validates_month_format(self):
+        with self.assertRaises(ValueError):
+            notion_tools.analyze_monthly_expenses({"month": "03-2026"}, _build_context())
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.update_notion_page")
     def test_edit_notion_item_updates_task_payload(self, mock_update_page):
         mock_update_page.return_value = {"id": "task-1", "updated_fields": ["task_name", "done"]}

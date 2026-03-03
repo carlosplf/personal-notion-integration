@@ -171,6 +171,112 @@ class TestNotionConnector(unittest.TestCase):
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_note_in_notes_db_accepts_explicit_date(self, mock_load_credentials, mock_post, mock_get):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_post.return_value = _MockResponse({"id": "note-1", "url": "https://notion.so/note-1"})
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Name": {"type": "title"},
+                    "Date": {"type": "date"},
+                }
+            }
+        )
+
+        with patch.dict("os.environ", {"NOTION_NOTES_DB_ID": "notes-db-id"}, clear=False):
+            notion_connector.create_note_in_notes_db(
+                {
+                    "note_name": "Financeiro - 2026-04",
+                    "tag": "FINANCE",
+                    "date": "2026-04-01",
+                    "observations": "EXPENSE|date=2026-04-02|amount=10.00|category=Outros|description=Teste",
+                    "url": "",
+                },
+                project_logger=_MockLogger(),
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["properties"]["Date"]["date"]["start"], "2026-04-01")
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_expense_in_expenses_db_posts_expected_fields(self, mock_load_credentials, mock_post, mock_get):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Nome": {"type": "title"},
+                    "Data": {"type": "date"},
+                    "Categoria": {"type": "select"},
+                    "Valor": {"type": "number"},
+                    "Descrição": {"type": "rich_text"},
+                }
+            }
+        )
+        mock_post.return_value = _MockResponse({"id": "expense-1", "url": "https://notion.so/expense-1"})
+
+        with patch.dict("os.environ", {"NOTION_EXPENSES_DB_ID": "expenses-db-id"}, clear=False):
+            result = notion_connector.create_expense_in_expenses_db(
+                {
+                    "name": "Despesa 2026-04-02",
+                    "date": "2026-04-02",
+                    "category": "Transporte",
+                    "description": "Uber ida",
+                    "amount": 33.9,
+                },
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(result["id"], "expense-1")
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["parent"]["database_id"], "expenses-db-id")
+        self.assertEqual(payload["properties"]["Nome"]["title"][0]["text"]["content"], "Despesa 2026-04-02")
+        self.assertEqual(payload["properties"]["Data"]["date"]["start"], "2026-04-02")
+        self.assertEqual(payload["properties"]["Categoria"]["select"]["name"], "Transporte")
+        self.assertEqual(payload["properties"]["Valor"]["number"], 33.9)
+        description_text = payload["properties"]["Descrição"]["rich_text"][0]["text"]["content"]
+        self.assertEqual(description_text, "Uber ida")
+
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_collect_expenses_from_expenses_db_parses_amount(self, mock_load_credentials, mock_post):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_post.return_value = _MockResponse(
+            {
+                "results": [
+                    {
+                        "id": "expense-1",
+                        "url": "https://notion.so/expense-1",
+                        "properties": {
+                            "Nome": {"title": [{"plain_text": "Despesa 2026-04-02"}]},
+                            "Data": {"date": {"start": "2026-04-02"}},
+                            "Categoria": {"type": "select", "select": {"name": "Transporte"}},
+                            "Valor": {"type": "number", "number": 33.9},
+                            "Descrição": {"rich_text": [{"plain_text": "Uber ida"}]},
+                        },
+                    }
+                ],
+                "has_more": False,
+                "next_cursor": None,
+            }
+        )
+
+        with patch.dict("os.environ", {"NOTION_EXPENSES_DB_ID": "expenses-db-id"}, clear=False):
+            expenses = notion_connector.collect_expenses_from_expenses_db(
+                start_date="2026-04-01",
+                end_date="2026-04-30",
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(len(expenses), 1)
+        self.assertEqual(expenses[0]["amount"], 33.9)
+        self.assertEqual(expenses[0]["category"], "Transporte")
+        self.assertEqual(expenses[0]["description"], "Uber ida")
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
     def test_create_note_in_notes_db_fallbacks_on_not_found(self, mock_load_credentials, mock_post, mock_get):
         mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
         mock_get.return_value = _MockResponse(

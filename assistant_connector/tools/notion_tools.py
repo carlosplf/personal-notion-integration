@@ -1,8 +1,55 @@
 from __future__ import annotations
 
 import datetime
+import re
 
 from notion_connector import notion_connector
+
+_CATEGORY_KEYWORDS = {
+    "Alimentação": ("mercado", "restaurante", "ifood", "lanche", "almoço", "jantar", "cafe"),
+    "Transporte": ("uber", "99", "taxi", "ônibus", "onibus", "combustivel", "gasolina", "pedagio"),
+    "Moradia": ("aluguel", "condominio", "energia", "luz", "agua", "internet", "gás", "gas"),
+    "Saúde": ("farmacia", "remedio", "consulta", "exame", "plano de saude", "hospital"),
+    "Lazer": ("cinema", "streaming", "show", "viagem", "bar"),
+}
+_CATEGORY_ALIASES = {
+    "alimentacao": "Alimentação",
+    "alimentação": "Alimentação",
+    "mercado": "Alimentação",
+    "transporte": "Transporte",
+    "mobilidade": "Transporte",
+    "moradia": "Moradia",
+    "casa": "Moradia",
+    "saude": "Saúde",
+    "saúde": "Saúde",
+    "lazer": "Lazer",
+    "outros": "Outros",
+}
+
+
+def _infer_expense_category(description):
+    normalized = description.lower()
+    for category, keywords in _CATEGORY_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            return category
+    return "Outros"
+
+
+def _normalize_expense_category(raw_category, description):
+    category = str(raw_category or "").strip()
+    if not category:
+        return _infer_expense_category(description)
+    normalized = category.lower()
+    return _CATEGORY_ALIASES.get(normalized, category.title())
+
+
+def _month_bounds(target_date):
+    month_start = target_date.replace(day=1)
+    if month_start.month == 12:
+        next_month = datetime.date(month_start.year + 1, 1, 1)
+    else:
+        next_month = datetime.date(month_start.year, month_start.month + 1, 1)
+    return month_start, (next_month - datetime.timedelta(days=1))
 
 
 def list_notion_tasks(arguments, context):
@@ -162,3 +209,89 @@ def edit_notion_item(arguments, context):
             raise ValueError("At least one card field is required")
 
     return notion_connector.update_notion_page(payload, project_logger=context.project_logger)
+
+
+def register_financial_expense(arguments, context):
+    description = str(arguments.get("description", "")).strip()
+    if not description:
+        raise ValueError("description is required")
+
+    raw_amount = str(arguments.get("amount", "")).strip().replace(",", ".")
+    amount = float(raw_amount)
+    if amount <= 0:
+        raise ValueError("amount must be greater than zero")
+
+    expense_date_raw = str(arguments.get("expense_date", datetime.date.today().isoformat())).strip()
+    expense_date = datetime.date.fromisoformat(expense_date_raw)
+    category = _normalize_expense_category(arguments.get("category"), description)
+    create_result = notion_connector.create_expense_in_expenses_db(
+        {
+            "name": f"Despesa {expense_date.isoformat()}",
+            "date": expense_date.isoformat(),
+            "category": category,
+            "description": description,
+            "amount": amount,
+        },
+        project_logger=context.project_logger,
+    )
+    return {
+        "status": "created",
+        "expense_id": create_result.get("id"),
+        "expense": {
+            "date": expense_date.isoformat(),
+            "amount": amount,
+            "category": category,
+            "description": description,
+        },
+    }
+
+
+def analyze_monthly_expenses(arguments, context):
+    month_value = str(arguments.get("month", "")).strip()
+    if month_value:
+        if not re.fullmatch(r"\d{4}-\d{2}", month_value):
+            raise ValueError("month must follow YYYY-MM")
+        target_date = datetime.date.fromisoformat(f"{month_value}-01")
+    else:
+        target_date = datetime.date.today().replace(day=1)
+    month_key = target_date.strftime("%Y-%m")
+    month_start, month_end = _month_bounds(target_date)
+    expenses = notion_connector.collect_expenses_from_expenses_db(
+        start_date=month_start.isoformat(),
+        end_date=month_end.isoformat(),
+        project_logger=context.project_logger,
+    )
+    if not expenses:
+        return {
+            "month": month_key,
+            "total_spent": 0.0,
+            "expenses_count": 0,
+            "breakdown_by_category": [],
+            "top_expense": None,
+        }
+
+    total_spent = round(sum(expense["amount"] for expense in expenses), 2)
+    by_category = {}
+    for expense in expenses:
+        category = expense["category"]
+        by_category[category] = by_category.get(category, 0.0) + expense["amount"]
+    breakdown = [
+        {"category": category, "total": round(amount, 2)}
+        for category, amount in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
+    ]
+    top_expense = max(expenses, key=lambda expense: expense["amount"]) if expenses else None
+    if top_expense:
+        top_expense = {
+            "date": top_expense["date"],
+            "amount": round(top_expense["amount"], 2),
+            "category": top_expense["category"],
+            "description": top_expense["description"],
+        }
+
+    return {
+        "month": month_key,
+        "total_spent": total_spent,
+        "expenses_count": len(expenses),
+        "breakdown_by_category": breakdown,
+        "top_expense": top_expense,
+    }

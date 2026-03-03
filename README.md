@@ -66,6 +66,7 @@ Create a `.env` at project root:
 ```env
 NOTION_DATABASE_ID="8be..."
 NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes (/note and /notes)
+NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Categoria, Descrição, Valor)
 NOTION_API_KEY="secret_x0l..."
 OPENAI_KEY="sk-..."
 LLM_MODEL="gpt-4.1-mini"               # model used across assistant flows (/tasks, /calendar, /add_*, /bot)

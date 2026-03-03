@@ -436,6 +436,15 @@ def _get_notes_database_id(project_logger):
     raise ValueError(error_message)
 
 
+def _get_expenses_database_id(project_logger):
+    raw_expenses_database_id = str(os.getenv("NOTION_EXPENSES_DB_ID", "")).strip()
+    if raw_expenses_database_id:
+        return _normalize_notion_object_id(raw_expenses_database_id)
+    error_message = "Missing required environment variable: NOTION_EXPENSES_DB_ID"
+    project_logger.error(error_message)
+    raise ValueError(error_message)
+
+
 def _normalize_notion_object_id(raw_value):
     value = str(raw_value or "").strip()
     if not value:
@@ -741,10 +750,11 @@ def create_note_in_notes_db(note_data, project_logger=None):
         "database_id": notes_database_id,
         "note_name": note_name,
         "tag": str(note_data.get("tag", "GENERAL")).strip() or "GENERAL",
-        "date": datetime.date.today().isoformat(),
+        "date": str(note_data.get("date", datetime.date.today().isoformat())).strip(),
         "observations": str(note_data.get("observations", "")).strip(),
         "url": str(note_data.get("url", "")).strip() or None,
     }
+    datetime.date.fromisoformat(create_data["date"])
     request_candidates = [
         {
             "notion_version": "2022-06-28",
@@ -1088,3 +1098,290 @@ def _build_notes_query_payload(candidate, start_date, end_date):
         ],
         "page_size": 100,
     }
+
+
+def create_expense_in_expenses_db(expense_data, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    expenses_database_id = _get_expenses_database_id(project_logger)
+    schema_properties = _fetch_database_schema(expenses_database_id, notion_credentials["api_key"])
+
+    expense_name = str(expense_data.get("name", "")).strip()
+    if not expense_name:
+        raise ValueError("name is required")
+    expense_date = str(expense_data.get("date", "")).strip()
+    if not expense_date:
+        raise ValueError("date is required")
+    datetime.date.fromisoformat(expense_date)
+    category = str(expense_data.get("category", "")).strip() or "Outros"
+    description = str(expense_data.get("description", "")).strip()
+    amount = float(expense_data.get("amount", 0))
+    if amount <= 0:
+        raise ValueError("amount must be greater than zero")
+
+    title_property, _ = _find_property_name(schema_properties, ("Nome", "Name"), {"title"})
+    date_property, _ = _find_property_name(schema_properties, ("Data", "Date"), {"date"})
+    category_property, category_type = _find_property_name(
+        schema_properties,
+        ("Categoria", "Category", "Tags", "Type"),
+        {"select", "multi_select", "rich_text"},
+    )
+    amount_property, amount_type = _find_property_name(
+        schema_properties,
+        ("Valor", "Amount", "Value"),
+        {"number", "rich_text"},
+    )
+    description_property, _ = _find_property_name(
+        schema_properties,
+        ("Descrição", "Descricao", "Description", "Observações", "Observacoes"),
+        {"rich_text"},
+    )
+
+    if not title_property:
+        raise ValueError("Expense title property not found in expenses database")
+    if not date_property:
+        raise ValueError("Expense date property not found in expenses database")
+
+    properties = {
+        title_property: {"title": [{"text": {"content": expense_name}}]},
+        date_property: {"date": {"start": expense_date}},
+    }
+    if category_property:
+        if category_type == "multi_select":
+            properties[category_property] = {"multi_select": [{"name": category}]}
+        elif category_type == "rich_text":
+            properties[category_property] = {"rich_text": _build_notion_rich_text_chunks(category)}
+        else:
+            properties[category_property] = {"select": {"name": category}}
+    if amount_property:
+        if amount_type == "number":
+            properties[amount_property] = {"number": amount}
+        else:
+            properties[amount_property] = {"rich_text": _build_notion_rich_text_chunks(f"{amount:.2f}")}
+    if description_property:
+        stored_description = description
+        if not amount_property:
+            stored_description = (
+                f"amount={amount:.2f}; {description}" if description else f"amount={amount:.2f}"
+            )
+        properties[description_property] = {"rich_text": _build_notion_rich_text_chunks(stored_description)}
+
+    request_candidates = [
+        {
+            "notion_version": "2022-06-28",
+            "parent": {"database_id": expenses_database_id},
+        },
+        {
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "parent": {"data_source_id": expenses_database_id},
+        },
+    ]
+    last_error = None
+    for request_candidate in request_candidates:
+        headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+            "Notion-Version": request_candidate["notion_version"],
+            "content-type": "application/json",
+        }
+        response = requests.post(
+            "https://api.notion.com/v1/pages",
+            json={"parent": request_candidate["parent"], "properties": properties},
+            headers=headers,
+            timeout=30,
+        )
+        if response.status_code in (400, 404):
+            response_code = response.json().get("code", "")
+            if response_code in ("validation_error", "object_not_found", "invalid_request"):
+                last_error = response
+                continue
+        response.raise_for_status()
+        payload = response.json()
+        return {
+            "id": payload.get("id"),
+            "page_url": payload.get("url"),
+            "name": expense_name,
+            "date": expense_date,
+            "category": category,
+            "description": description,
+            "amount": round(amount, 2),
+        }
+
+    if last_error is not None:
+        last_error.raise_for_status()
+    raise RuntimeError("Failed to create expense in Notion")
+
+
+def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    expenses_database_id = _get_expenses_database_id(project_logger)
+
+    query_candidates = [
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{expenses_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{expenses_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{expenses_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "Date",
+        },
+    ]
+
+    all_expenses = []
+    selected_candidate = None
+    has_more = True
+    next_cursor = None
+    while has_more:
+        if selected_candidate is None:
+            last_error = None
+            for candidate in query_candidates:
+                request_payload = {
+                    "filter": {
+                        "and": [
+                            {"property": candidate["date_property"], "date": {"on_or_after": start_date}},
+                            {"property": candidate["date_property"], "date": {"on_or_before": end_date}},
+                        ]
+                    },
+                    "sorts": [{"property": candidate["date_property"], "direction": "ascending"}],
+                    "page_size": 100,
+                }
+                if next_cursor:
+                    request_payload["start_cursor"] = next_cursor
+                headers = {
+                    "accept": "application/json",
+                    "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                    "Notion-Version": candidate["notion_version"],
+                    "content-type": "application/json",
+                }
+                response = requests.post(candidate["url"], json=request_payload, headers=headers, timeout=30)
+                if response.status_code in (400, 404):
+                    response_code = response.json().get("code", "")
+                    if response_code in ("validation_error", "invalid_request_url", "object_not_found"):
+                        last_error = response
+                        continue
+                response.raise_for_status()
+                selected_candidate = candidate
+                break
+            if selected_candidate is None:
+                last_error.raise_for_status()
+        else:
+            request_payload = {
+                "filter": {
+                    "and": [
+                        {"property": selected_candidate["date_property"], "date": {"on_or_after": start_date}},
+                        {"property": selected_candidate["date_property"], "date": {"on_or_before": end_date}},
+                    ]
+                },
+                "sorts": [{"property": selected_candidate["date_property"], "direction": "ascending"}],
+                "page_size": 100,
+            }
+            if next_cursor:
+                request_payload["start_cursor"] = next_cursor
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                "Notion-Version": selected_candidate["notion_version"],
+                "content-type": "application/json",
+            }
+            response = requests.post(
+                selected_candidate["url"],
+                json=request_payload,
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        payload = response.json()
+        for expense_page in payload.get("results", []):
+            properties = expense_page.get("properties", {})
+            expense_name = (
+                properties.get("Nome", {}).get("title", [])
+                or properties.get("Name", {}).get("title", [])
+            )
+            expense_date = (
+                properties.get("Data", {}).get("date")
+                or properties.get("Date", {}).get("date")
+            )
+            category_value = ""
+            category_property = (
+                properties.get("Categoria")
+                or properties.get("Category")
+                or properties.get("Tags")
+                or {}
+            )
+            if category_property.get("type") == "select":
+                category_value = category_property.get("select", {}).get("name", "")
+            elif category_property.get("type") == "multi_select":
+                first = category_property.get("multi_select", [])
+                category_value = first[0].get("name", "") if first else ""
+            elif category_property.get("type") == "rich_text":
+                category_value = "".join(
+                    chunk.get("plain_text") or chunk.get("text", {}).get("content", "")
+                    for chunk in category_property.get("rich_text", [])
+                )
+
+            description_property = (
+                properties.get("Descrição", {}).get("rich_text")
+                or properties.get("Descricao", {}).get("rich_text")
+                or properties.get("Description", {}).get("rich_text")
+                or properties.get("Observações", {}).get("rich_text")
+                or properties.get("Observacoes", {}).get("rich_text")
+                or []
+            )
+            description = "".join(
+                chunk.get("plain_text") or chunk.get("text", {}).get("content", "")
+                for chunk in description_property
+            ).strip()
+            amount_property = (
+                properties.get("Valor")
+                or properties.get("Amount")
+                or properties.get("Value")
+                or {}
+            )
+            amount = 0.0
+            if amount_property.get("type") == "number":
+                amount = float(amount_property.get("number") or 0.0)
+            elif amount_property.get("type") == "rich_text":
+                amount_text = "".join(
+                    chunk.get("plain_text") or chunk.get("text", {}).get("content", "")
+                    for chunk in amount_property.get("rich_text", [])
+                )
+                amount_match = re.search(r"([0-9]+(?:[.,][0-9]{1,2})?)", amount_text)
+                if amount_match:
+                    amount = float(amount_match.group(1).replace(",", "."))
+            if amount == 0.0:
+                legacy_match = re.search(
+                    r"amount\s*=\s*([0-9]+(?:[.,][0-9]{1,2})?)",
+                    description,
+                    re.IGNORECASE,
+                )
+                if legacy_match:
+                    amount = float(legacy_match.group(1).replace(",", "."))
+
+            if not expense_name or not expense_date or not expense_date.get("start"):
+                continue
+
+            all_expenses.append(
+                {
+                    "id": expense_page.get("id"),
+                    "name": expense_name[0].get("plain_text") or expense_name[0].get("text", {}).get("content"),
+                    "date": expense_date.get("start"),
+                    "category": category_value or "Outros",
+                    "description": re.sub(r"^amount\s*=\s*[0-9]+(?:[.,][0-9]{1,2})?\s*;\s*", "", description, flags=re.IGNORECASE),
+                    "amount": round(amount, 2),
+                    "page_url": expense_page.get("url"),
+                }
+            )
+
+        has_more = payload.get("has_more", False)
+        next_cursor = payload.get("next_cursor")
+
+    return all_expenses
