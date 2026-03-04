@@ -9,6 +9,7 @@ def send_email(arguments, context):
     subject = str(arguments.get("subject", "")).strip()
     body = str(arguments.get("body", "")).strip()
     recipient = str(arguments.get("recipient_email", "")).strip()
+    reply_to_message_id = str(arguments.get("reply_to_message_id", "")).strip()
     if not recipient:
         raise ValueError("recipient_email is required")
     if not subject:
@@ -29,6 +30,7 @@ def send_email(arguments, context):
         body_text=final_body,
         email_to=recipient,
         body_subtype="plain",
+        reply_to_message_id=reply_to_message_id or None,
     )
     return {
         "status": "sent",

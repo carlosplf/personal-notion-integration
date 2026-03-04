@@ -526,6 +526,25 @@ class TestAssistantTools(unittest.TestCase):
         sent_body = mock_send_custom_email.call_args.kwargs["body_text"]
         self.assertNotIn("Carlos", sent_body)
 
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_forwards_reply_to_message_id(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-2", "thread_id": "thread-1"}
+
+        email_tools.send_email(
+            {
+                "subject": "Re: Atualização",
+                "body": "Respondendo no mesmo fio.",
+                "recipient_email": "x@example.com",
+                "reply_to_message_id": "orig-msg-id",
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(
+            mock_send_custom_email.call_args.kwargs["reply_to_message_id"],
+            "orig-msg-id",
+        )
+
     def test_send_email_requires_subject_and_body(self):
         with self.assertRaises(ValueError):
             email_tools.send_email(

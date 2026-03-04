@@ -2,6 +2,7 @@ import unittest
 import os
 import json
 import base64
+from email import message_from_bytes
 import tempfile
 from unittest.mock import patch
 
@@ -130,6 +131,50 @@ class TestGmailConnector(unittest.TestCase):
         self.assertEqual(result["id"], "gmail-msg-1")
         self.assertEqual(result["thread_id"], "thread-1")
         self.assertEqual(result["to"], "x@example.com")
+
+    @patch("gmail_connector.gmail_connector.build")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    def test_send_custom_email_replies_in_same_thread(
+        self,
+        mock_from_authorized_user_file,
+        mock_build,
+    ):
+        mock_from_authorized_user_file.return_value = object()
+        service = unittest.mock.Mock()
+        users = service.users.return_value
+        messages = users.messages.return_value
+        messages.get.return_value.execute.return_value = {
+            "threadId": "thread-original",
+            "payload": {
+                "headers": [
+                    {"name": "Message-Id", "value": "<original@example.com>"},
+                    {"name": "References", "value": "<older@example.com>"},
+                ]
+            },
+        }
+        messages.send.return_value.execute.return_value = {
+            "id": "gmail-msg-2",
+            "threadId": "thread-original",
+        }
+        mock_build.return_value = service
+
+        with patch.dict(os.environ, {"EMAIL_FROM": "from@example.com"}, clear=False):
+            result = gmail_connector.send_custom_email(
+                project_logger=_MockLogger(),
+                subject="Assunto",
+                body_text="Conteúdo",
+                email_to="x@example.com",
+                reply_to_message_id="orig-msg-id",
+            )
+
+        self.assertEqual(result["thread_id"], "thread-original")
+        send_body = messages.send.call_args.kwargs["body"]
+        self.assertEqual(send_body["threadId"], "thread-original")
+        raw_payload = send_body["raw"]
+        padding = "=" * ((4 - len(raw_payload) % 4) % 4)
+        mime_message = message_from_bytes(base64.urlsafe_b64decode(f"{raw_payload}{padding}"))
+        self.assertEqual(mime_message.get("In-Reply-To"), "<original@example.com>")
+        self.assertIn("<original@example.com>", mime_message.get("References", ""))
 
     def test_send_custom_email_requires_destination(self):
         with patch.dict(os.environ, {"EMAIL_FROM": "from@example.com", "EMAIL_TO": ""}, clear=False):

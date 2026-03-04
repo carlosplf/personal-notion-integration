@@ -529,6 +529,10 @@
             "type": "string",
             "description": "Corpo do email em texto/Markdown."
           },
+          "reply_to_message_id": {
+            "type": "string",
+            "description": "ID opcional da mensagem original para responder na mesma thread do Gmail."
+          },
           "tone_override": {
             "type": "string",
             "description": "Tom opcional para este email específico."

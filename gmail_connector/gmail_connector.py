@@ -146,6 +146,7 @@ def send_custom_email(
     email_to=None,
     email_from=None,
     body_subtype="plain",
+    reply_to_message_id=None,
     fake_send=False,
 ):
     """
@@ -169,25 +170,63 @@ def send_custom_email(
     message["To"] = resolved_to
     message["From"] = resolved_from
     message["Subject"] = clean_subject
-    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
     if fake_send:
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
         return {
             "to": resolved_to,
             "from": resolved_from,
             "subject": clean_subject,
             "raw": encoded_message,
+            "reply_to_message_id": str(reply_to_message_id or "").strip() or None,
         }
 
     creds = _load_credentials_from_token("token.json", SCOPES, project_logger)
     service = build("gmail", "v1", credentials=creds)
-    sent = service.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
+    send_payload = {}
+    clean_reply_to_message_id = str(reply_to_message_id or "").strip()
+    if clean_reply_to_message_id:
+        reply_metadata = _get_reply_metadata(
+            service=service,
+            message_id=clean_reply_to_message_id,
+        )
+        original_message_id = reply_metadata.get("message_id")
+        if original_message_id:
+            message["In-Reply-To"] = original_message_id
+            references = " ".join(
+                token
+                for token in [reply_metadata.get("references", ""), original_message_id]
+                if token
+            ).strip()
+            if references:
+                message["References"] = references
+        if reply_metadata.get("thread_id"):
+            send_payload["threadId"] = reply_metadata["thread_id"]
+
+    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    send_payload["raw"] = encoded_message
+    sent = service.users().messages().send(userId="me", body=send_payload).execute()
     return {
         "id": sent.get("id"),
         "thread_id": sent.get("threadId"),
         "to": resolved_to,
         "from": resolved_from,
         "subject": clean_subject,
+    }
+
+
+def _get_reply_metadata(service, message_id):
+    response = service.users().messages().get(
+        userId="me",
+        id=message_id,
+        format="metadata",
+        metadataHeaders=["Message-Id", "References"],
+    ).execute()
+    headers = _extract_headers(response.get("payload", {}) or {})
+    return {
+        "thread_id": response.get("threadId"),
+        "message_id": headers.get("message-id", ""),
+        "references": headers.get("references", ""),
     }
 
 
