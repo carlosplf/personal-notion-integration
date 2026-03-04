@@ -17,9 +17,8 @@ def send_email(arguments, context):
     if not body:
         raise ValueError("body is required")
 
-    include_signature = bool(arguments.get("include_signature", True))
     tone = str(arguments.get("tone_override", "")).strip() or _get_email_tone()
-    signature = _get_email_signature() if include_signature else ""
+    signature = _get_email_signature()
 
     final_subject = _apply_subject_prefix(subject)
     final_body = _compose_email_body(body, signature=signature)

@@ -510,7 +510,7 @@ class TestAssistantTools(unittest.TestCase):
         self.assertIn("Carlos", sent_body)
 
     @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
-    def test_send_email_can_skip_signature(self, mock_send_custom_email):
+    def test_send_email_always_applies_signature_even_when_flag_is_false(self, mock_send_custom_email):
         mock_send_custom_email.return_value = {"id": "msg-1"}
         with patch.dict(os.environ, {"EMAIL_ASSISTANT_SIGNATURE": "Carlos"}, clear=False):
             email_tools.send_email(
@@ -524,7 +524,7 @@ class TestAssistantTools(unittest.TestCase):
             )
 
         sent_body = mock_send_custom_email.call_args.kwargs["body_text"]
-        self.assertNotIn("Carlos", sent_body)
+        self.assertIn("Carlos", sent_body)
 
     @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
     def test_send_email_forwards_reply_to_message_id(self, mock_send_custom_email):

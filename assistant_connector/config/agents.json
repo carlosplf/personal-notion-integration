@@ -539,7 +539,7 @@
           },
           "include_signature": {
             "type": "boolean",
-            "description": "Quando true, adiciona assinatura definida em EMAIL_ASSISTANT_SIGNATURE."
+            "description": "Parâmetro legado: a assinatura definida em EMAIL_ASSISTANT_SIGNATURE é sempre aplicada."
           },
           "confirmed": {
             "type": "boolean",
