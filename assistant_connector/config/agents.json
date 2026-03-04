@@ -549,6 +549,75 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "list_unpaid_monthly_bills",
+      "description": "Lista contas fixas mensais ainda não pagas no Notion (NOTION_MONTHLY_BILLS_DB_ID).",
+      "handler": "assistant_connector.tools.notion_tools:list_unpaid_monthly_bills",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "Mês no formato YYYY-MM. Se omitido, usa mês atual."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de contas retornadas.",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "mark_monthly_bill_as_paid",
+      "description": "Marca uma conta fixa mensal como paga no Notion, com valor pago opcional.",
+      "handler": "assistant_connector.tools.notion_tools:mark_monthly_bill_as_paid",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "ID da página da conta no Notion (aceita ID ou URL)."
+          },
+          "paid_amount": {
+            "type": "number",
+            "description": "Valor efetivamente pago (opcional)."
+          },
+          "payment_date": {
+            "type": "string",
+            "description": "Data opcional do pagamento no formato YYYY-MM-DD."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "analyze_monthly_bills",
+      "description": "Analisa contas fixas mensais do Notion, com totais, pendências e breakdown por categoria.",
+      "handler": "assistant_connector.tools.notion_tools:analyze_monthly_bills",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "Mês no formato YYYY-MM. Se omitido, usa mês atual."
+          }
+        },
+        "additionalProperties": false
+      }
     }
   ],
   "agents": [
@@ -558,7 +627,7 @@
       "model": "gpt-4.1-mini",
       "max_tool_rounds": 6,
       "memory_window": 20,
-      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Em emails, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional não pedido. Para controle financeiro, registre gastos no database de despesas com register_financial_expense (priorize categorias consistentes e úteis para análise) e, quando o usuário pedir consulta/relatório de despesas, use analyze_monthly_expenses. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
+      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Em emails, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional não pedido. Para controle financeiro, registre gastos no database de despesas com register_financial_expense (priorize categorias consistentes e úteis para análise) e, quando o usuário pedir consulta/relatório de despesas, use analyze_monthly_expenses. Para contas fixas mensais, consulte pendências com list_unpaid_monthly_bills, marque pagamentos com mark_monthly_bill_as_paid e faça análises com analyze_monthly_bills. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva.",
       "tools": [
         "list_available_tools",
         "list_available_agents",
@@ -568,6 +637,9 @@
         "create_notion_note",
         "register_financial_expense",
         "analyze_monthly_expenses",
+        "analyze_monthly_bills",
+        "mark_monthly_bill_as_paid",
+        "list_unpaid_monthly_bills",
         "edit_notion_item",
         "list_calendar_events",
         "create_calendar_event",

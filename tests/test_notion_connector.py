@@ -27,6 +27,9 @@ class _MockLogger:
     def warning(self, *_args, **_kwargs):
         return None
 
+    def error(self, *_args, **_kwargs):
+        return None
+
 
 class TestNotionConnector(unittest.TestCase):
     def test_build_notion_rich_text_chunks_preserves_markdown_annotations(self):
@@ -273,6 +276,81 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(expenses[0]["amount"], 33.9)
         self.assertEqual(expenses[0]["category"], "Transporte")
         self.assertEqual(expenses[0]["description"], "Uber ida")
+
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_collect_monthly_bills_from_database_parses_expected_fields(self, mock_load_credentials, mock_post):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_post.return_value = _MockResponse(
+            {
+                "results": [
+                    {
+                        "id": "bill-1",
+                        "url": "https://notion.so/bill-1",
+                        "properties": {
+                            "Nome": {"title": [{"plain_text": "Internet"}]},
+                            "Data": {"date": {"start": "2026-04-05"}},
+                            "Pago": {"type": "checkbox", "checkbox": False},
+                            "Categoria": {"type": "select", "select": {"name": "Casa"}},
+                            "Budget": {"type": "number", "number": 120.0},
+                            "Valor pago": {"type": "number", "number": 0.0},
+                            "Descrição": {"type": "rich_text", "rich_text": [{"plain_text": "Fatura mensal"}]},
+                        },
+                    }
+                ],
+                "has_more": False,
+                "next_cursor": None,
+            }
+        )
+
+        with patch.dict("os.environ", {"NOTION_MONTHLY_BILLS_DB_ID": "monthly-bills-id"}, clear=False):
+            bills = notion_connector.collect_monthly_bills_from_database(
+                start_date="2026-04-01",
+                end_date="2026-04-30",
+                unpaid_only=True,
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(len(bills), 1)
+        self.assertEqual(bills[0]["name"], "Internet")
+        self.assertFalse(bills[0]["paid"])
+        self.assertEqual(bills[0]["budget"], 120.0)
+        self.assertEqual(bills[0]["description"], "Fatura mensal")
+        request_payload = mock_post.call_args.kwargs["json"]
+        paid_filter = request_payload["filter"]["and"][2]
+        self.assertEqual(paid_filter["property"], "Pago")
+        self.assertEqual(paid_filter["checkbox"]["equals"], False)
+
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_monthly_bill_payment_updates_pago_and_valor_pago(self, mock_load_credentials, mock_patch):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_patch.return_value = _MockResponse({"id": "bill-1", "url": "https://notion.so/bill-1"})
+
+        result = notion_connector.update_monthly_bill_payment(
+            page_id="bill-1",
+            paid=True,
+            paid_amount=120.5,
+            payment_date="2026-04-05",
+            project_logger=_MockLogger(),
+        )
+
+        self.assertEqual(result["id"], "bill-1")
+        payload = mock_patch.call_args.kwargs["json"]
+        self.assertTrue(payload["properties"]["Pago"]["checkbox"])
+        self.assertEqual(payload["properties"]["Valor pago"]["number"], 120.5)
+        self.assertEqual(payload["properties"]["Data"]["date"]["start"], "2026-04-05")
+
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_collect_monthly_bills_requires_env_var(self, mock_load_credentials):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        with patch.dict("os.environ", {"NOTION_MONTHLY_BILLS_DB_ID": ""}, clear=False):
+            with self.assertRaises(ValueError):
+                notion_connector.collect_monthly_bills_from_database(
+                    start_date="2026-04-01",
+                    end_date="2026-04-30",
+                    project_logger=_MockLogger(),
+                )
 
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")

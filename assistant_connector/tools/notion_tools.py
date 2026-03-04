@@ -295,3 +295,128 @@ def analyze_monthly_expenses(arguments, context):
         "breakdown_by_category": breakdown,
         "top_expense": top_expense,
     }
+
+
+def list_unpaid_monthly_bills(arguments, context):
+    month_value = str(arguments.get("month", "")).strip()
+    if month_value:
+        if not re.fullmatch(r"\d{4}-\d{2}", month_value):
+            raise ValueError("month must follow YYYY-MM")
+        target_date = datetime.date.fromisoformat(f"{month_value}-01")
+    else:
+        target_date = datetime.date.today().replace(day=1)
+    limit = int(arguments.get("limit", 30))
+    limit = min(max(limit, 1), 100)
+
+    month_start, month_end = _month_bounds(target_date)
+    bills = notion_connector.collect_monthly_bills_from_database(
+        start_date=month_start.isoformat(),
+        end_date=month_end.isoformat(),
+        unpaid_only=True,
+        project_logger=context.project_logger,
+    )
+    return {
+        "month": target_date.strftime("%Y-%m"),
+        "total": len(bills),
+        "returned": min(len(bills), limit),
+        "bills": bills[:limit],
+    }
+
+
+def mark_monthly_bill_as_paid(arguments, context):
+    page_id = str(arguments.get("page_id", "")).strip()
+    if not page_id:
+        raise ValueError("page_id is required")
+
+    paid_amount = arguments.get("paid_amount")
+    normalized_paid_amount = None
+    if paid_amount is not None:
+        normalized_paid_amount = float(str(paid_amount).replace(",", "."))
+        if normalized_paid_amount < 0:
+            raise ValueError("paid_amount must be >= 0")
+
+    payment_date = str(arguments.get("payment_date", "")).strip() or None
+    if payment_date:
+        datetime.date.fromisoformat(payment_date)
+
+    result = notion_connector.update_monthly_bill_payment(
+        page_id=page_id,
+        paid=True,
+        paid_amount=normalized_paid_amount,
+        payment_date=payment_date,
+        project_logger=context.project_logger,
+    )
+    return {
+        "status": "updated",
+        "bill_id": result.get("id"),
+        "paid": result.get("paid", True),
+        "paid_amount": result.get("paid_amount"),
+        "payment_date": result.get("payment_date"),
+    }
+
+
+def analyze_monthly_bills(arguments, context):
+    month_value = str(arguments.get("month", "")).strip()
+    if month_value:
+        if not re.fullmatch(r"\d{4}-\d{2}", month_value):
+            raise ValueError("month must follow YYYY-MM")
+        target_date = datetime.date.fromisoformat(f"{month_value}-01")
+    else:
+        target_date = datetime.date.today().replace(day=1)
+
+    month_start, month_end = _month_bounds(target_date)
+    bills = notion_connector.collect_monthly_bills_from_database(
+        start_date=month_start.isoformat(),
+        end_date=month_end.isoformat(),
+        unpaid_only=False,
+        project_logger=context.project_logger,
+    )
+    if not bills:
+        return {
+            "month": target_date.strftime("%Y-%m"),
+            "total_bills": 0,
+            "paid_count": 0,
+            "unpaid_count": 0,
+            "total_budget": 0.0,
+            "total_paid_amount": 0.0,
+            "pending_budget": 0.0,
+            "breakdown_by_category": [],
+        }
+
+    total_budget = round(sum(bill["budget"] for bill in bills), 2)
+    total_paid_amount = round(sum(bill["paid_amount"] for bill in bills), 2)
+    paid_count = sum(1 for bill in bills if bill["paid"])
+    unpaid_count = len(bills) - paid_count
+    pending_budget = round(sum(bill["budget"] for bill in bills if not bill["paid"]), 2)
+
+    by_category = {}
+    for bill in bills:
+        category = bill["category"]
+        category_values = by_category.setdefault(
+            category,
+            {"category": category, "total_budget": 0.0, "total_paid": 0.0, "unpaid_count": 0},
+        )
+        category_values["total_budget"] += bill["budget"]
+        category_values["total_paid"] += bill["paid_amount"]
+        if not bill["paid"]:
+            category_values["unpaid_count"] += 1
+    breakdown_by_category = [
+        {
+            "category": item["category"],
+            "total_budget": round(item["total_budget"], 2),
+            "total_paid": round(item["total_paid"], 2),
+            "unpaid_count": item["unpaid_count"],
+        }
+        for item in sorted(by_category.values(), key=lambda value: value["total_budget"], reverse=True)
+    ]
+
+    return {
+        "month": target_date.strftime("%Y-%m"),
+        "total_bills": len(bills),
+        "paid_count": paid_count,
+        "unpaid_count": unpaid_count,
+        "total_budget": total_budget,
+        "total_paid_amount": total_paid_amount,
+        "pending_budget": pending_budget,
+        "breakdown_by_category": breakdown_by_category,
+    }

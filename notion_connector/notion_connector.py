@@ -445,6 +445,15 @@ def _get_expenses_database_id(project_logger):
     raise ValueError(error_message)
 
 
+def _get_monthly_bills_database_id(project_logger):
+    raw_monthly_bills_database_id = str(os.getenv("NOTION_MONTHLY_BILLS_DB_ID", "")).strip()
+    if raw_monthly_bills_database_id:
+        return _normalize_notion_object_id(raw_monthly_bills_database_id)
+    error_message = "Missing required environment variable: NOTION_MONTHLY_BILLS_DB_ID"
+    project_logger.error(error_message)
+    raise ValueError(error_message)
+
+
 def _normalize_notion_object_id(raw_value):
     value = str(raw_value or "").strip()
     if not value:
@@ -1385,3 +1394,207 @@ def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=No
         next_cursor = payload.get("next_cursor")
 
     return all_expenses
+
+
+def _extract_plain_text(property_payload):
+    payload_type = property_payload.get("type")
+    if payload_type == "rich_text":
+        source = property_payload.get("rich_text", [])
+    elif payload_type == "title":
+        source = property_payload.get("title", [])
+    else:
+        source = []
+    return "".join(
+        chunk.get("plain_text") or chunk.get("text", {}).get("content", "")
+        for chunk in source
+    ).strip()
+
+
+def _extract_select_name(property_payload):
+    payload_type = property_payload.get("type")
+    if payload_type == "select":
+        return str(property_payload.get("select", {}).get("name") or "").strip()
+    if payload_type == "multi_select":
+        first_item = property_payload.get("multi_select", [])
+        if first_item:
+            return str(first_item[0].get("name") or "").strip()
+    if payload_type in {"rich_text", "title"}:
+        return _extract_plain_text(property_payload)
+    return ""
+
+
+def collect_monthly_bills_from_database(*, start_date, end_date, unpaid_only=False, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    monthly_bills_database_id = _get_monthly_bills_database_id(project_logger)
+
+    query_candidates = [
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{monthly_bills_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "date_property": "Data",
+            "paid_property": "Pago",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{monthly_bills_database_id}/query",
+            "notion_version": "2022-06-28",
+            "date_property": "Data",
+            "paid_property": "Pago",
+        },
+    ]
+
+    all_bills = []
+    selected_candidate = None
+    has_more = True
+    next_cursor = None
+    while has_more:
+        if selected_candidate is None:
+            last_error = None
+            for candidate in query_candidates:
+                filters = [
+                    {"property": candidate["date_property"], "date": {"on_or_after": start_date}},
+                    {"property": candidate["date_property"], "date": {"on_or_before": end_date}},
+                ]
+                if unpaid_only:
+                    filters.append({"property": candidate["paid_property"], "checkbox": {"equals": False}})
+                request_payload = {
+                    "filter": {"and": filters},
+                    "sorts": [{"property": candidate["date_property"], "direction": "ascending"}],
+                    "page_size": 100,
+                }
+                if next_cursor:
+                    request_payload["start_cursor"] = next_cursor
+                headers = {
+                    "accept": "application/json",
+                    "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                    "Notion-Version": candidate["notion_version"],
+                    "content-type": "application/json",
+                }
+                response = requests.post(candidate["url"], json=request_payload, headers=headers, timeout=30)
+                if response.status_code in (400, 404):
+                    response_code = response.json().get("code", "")
+                    if response_code in ("validation_error", "invalid_request_url", "object_not_found"):
+                        last_error = response
+                        continue
+                response.raise_for_status()
+                selected_candidate = candidate
+                break
+            if selected_candidate is None:
+                last_error.raise_for_status()
+        else:
+            filters = [
+                {"property": selected_candidate["date_property"], "date": {"on_or_after": start_date}},
+                {"property": selected_candidate["date_property"], "date": {"on_or_before": end_date}},
+            ]
+            if unpaid_only:
+                filters.append({"property": selected_candidate["paid_property"], "checkbox": {"equals": False}})
+            request_payload = {
+                "filter": {"and": filters},
+                "sorts": [{"property": selected_candidate["date_property"], "direction": "ascending"}],
+                "page_size": 100,
+            }
+            if next_cursor:
+                request_payload["start_cursor"] = next_cursor
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                "Notion-Version": selected_candidate["notion_version"],
+                "content-type": "application/json",
+            }
+            response = requests.post(
+                selected_candidate["url"],
+                json=request_payload,
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        payload = response.json()
+        for bill_page in payload.get("results", []):
+            properties = bill_page.get("properties", {})
+            bill_name = (
+                properties.get("Nome", {}).get("title", [])
+                or properties.get("Name", {}).get("title", [])
+            )
+            bill_date = (
+                properties.get("Data", {}).get("date")
+                or properties.get("Date", {}).get("date")
+            )
+            if not bill_name or not bill_date or not bill_date.get("start"):
+                continue
+
+            paid_property = properties.get("Pago", {})
+            budget_property = properties.get("Budget") or properties.get("Orçamento") or properties.get("Orcamento") or {}
+            paid_amount_property = properties.get("Valor pago") or properties.get("Valor Pago") or properties.get("Paid Amount") or {}
+            description_property = properties.get("Descrição") or properties.get("Descricao") or properties.get("Description") or {}
+            category_property = properties.get("Categoria") or properties.get("Category") or {}
+
+            budget = 0.0
+            if budget_property.get("type") == "number":
+                budget = float(budget_property.get("number") or 0.0)
+            paid_amount = 0.0
+            if paid_amount_property.get("type") == "number":
+                paid_amount = float(paid_amount_property.get("number") or 0.0)
+
+            all_bills.append(
+                {
+                    "id": bill_page.get("id"),
+                    "name": bill_name[0].get("plain_text") or bill_name[0].get("text", {}).get("content"),
+                    "date": bill_date.get("start"),
+                    "paid": bool(paid_property.get("checkbox", False)),
+                    "category": _extract_select_name(category_property) or "Sem categoria",
+                    "budget": round(budget, 2),
+                    "paid_amount": round(paid_amount, 2),
+                    "description": _extract_plain_text(description_property),
+                    "page_url": bill_page.get("url"),
+                }
+            )
+
+        has_more = payload.get("has_more", False)
+        next_cursor = payload.get("next_cursor")
+
+    return all_bills
+
+
+def update_monthly_bill_payment(
+    *,
+    page_id,
+    paid,
+    paid_amount=None,
+    payment_date=None,
+    project_logger=None,
+):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    normalized_page_id = _normalize_notion_object_id(page_id)
+    if not normalized_page_id:
+        raise ValueError("page_id is required")
+
+    properties = {"Pago": {"checkbox": bool(paid)}}
+    if paid_amount is not None:
+        properties["Valor pago"] = {"number": float(paid_amount)}
+    if payment_date:
+        datetime.date.fromisoformat(str(payment_date))
+        properties["Data"] = {"date": {"start": str(payment_date)}}
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+        "Notion-Version": "2022-06-28",
+        "content-type": "application/json",
+    }
+    response = requests.patch(
+        f"https://api.notion.com/v1/pages/{normalized_page_id}",
+        json={"properties": properties},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return {
+        "id": payload.get("id"),
+        "page_url": payload.get("url"),
+        "paid": bool(paid),
+        "paid_amount": round(float(paid_amount), 2) if paid_amount is not None else None,
+        "payment_date": str(payment_date) if payment_date else None,
+    }

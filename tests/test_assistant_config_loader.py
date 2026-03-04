@@ -15,6 +15,9 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("list_notion_notes", agent.tools)
         self.assertIn("create_notion_note", agent.tools)
         self.assertIn("edit_notion_item", agent.tools)
+        self.assertIn("list_unpaid_monthly_bills", agent.tools)
+        self.assertIn("mark_monthly_bill_as_paid", agent.tools)
+        self.assertIn("analyze_monthly_bills", agent.tools)
         self.assertIn("list_tech_news", agent.tools)
         self.assertIn("search_emails", agent.tools)
         self.assertIn("read_email", agent.tools)
@@ -26,6 +29,7 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertTrue(configuration.tools["create_notion_task"].write_operation)
         self.assertTrue(configuration.tools["create_notion_note"].write_operation)
         self.assertTrue(configuration.tools["edit_notion_item"].write_operation)
+        self.assertTrue(configuration.tools["mark_monthly_bill_as_paid"].write_operation)
         self.assertTrue(configuration.tools["create_calendar_event"].write_operation)
         self.assertTrue(configuration.tools["send_email"].write_operation)
 

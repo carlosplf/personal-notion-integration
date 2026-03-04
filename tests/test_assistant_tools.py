@@ -263,6 +263,94 @@ class TestAssistantTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             notion_tools.analyze_monthly_expenses({"month": "03-2026"}, _build_context())
 
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_monthly_bills_from_database")
+    def test_list_unpaid_monthly_bills_returns_filtered_data(self, mock_collect_bills):
+        mock_collect_bills.return_value = [
+            {
+                "id": "bill-1",
+                "name": "Internet",
+                "date": "2026-03-05",
+                "paid": False,
+                "category": "Casa",
+                "budget": 120.0,
+                "paid_amount": 0.0,
+                "description": "",
+            }
+        ]
+
+        result = notion_tools.list_unpaid_monthly_bills({"month": "2026-03", "limit": 10}, _build_context())
+
+        self.assertEqual(result["month"], "2026-03")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["bills"][0]["name"], "Internet")
+
+    def test_list_unpaid_monthly_bills_validates_month_format(self):
+        with self.assertRaises(ValueError):
+            notion_tools.list_unpaid_monthly_bills({"month": "03-2026"}, _build_context())
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.update_monthly_bill_payment")
+    def test_mark_monthly_bill_as_paid_updates_page(self, mock_update_bill):
+        mock_update_bill.return_value = {"id": "bill-1", "paid": True, "paid_amount": 120.0, "payment_date": "2026-03-05"}
+
+        result = notion_tools.mark_monthly_bill_as_paid(
+            {"page_id": "bill-1", "paid_amount": 120, "payment_date": "2026-03-05"},
+            _build_context(),
+        )
+
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["bill_id"], "bill-1")
+        self.assertEqual(result["paid_amount"], 120.0)
+
+    def test_mark_monthly_bill_as_paid_rejects_negative_amount(self):
+        with self.assertRaises(ValueError):
+            notion_tools.mark_monthly_bill_as_paid(
+                {"page_id": "bill-1", "paid_amount": -1},
+                _build_context(),
+            )
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_monthly_bills_from_database")
+    def test_analyze_monthly_bills_returns_totals(self, mock_collect_bills):
+        mock_collect_bills.return_value = [
+            {
+                "id": "bill-1",
+                "name": "Internet",
+                "date": "2026-03-05",
+                "paid": True,
+                "category": "Casa",
+                "budget": 120.0,
+                "paid_amount": 120.0,
+                "description": "",
+            },
+            {
+                "id": "bill-2",
+                "name": "Luz",
+                "date": "2026-03-10",
+                "paid": False,
+                "category": "Casa",
+                "budget": 200.0,
+                "paid_amount": 0.0,
+                "description": "",
+            },
+        ]
+
+        result = notion_tools.analyze_monthly_bills({"month": "2026-03"}, _build_context())
+
+        self.assertEqual(result["month"], "2026-03")
+        self.assertEqual(result["total_bills"], 2)
+        self.assertEqual(result["paid_count"], 1)
+        self.assertEqual(result["unpaid_count"], 1)
+        self.assertEqual(result["total_budget"], 320.0)
+        self.assertEqual(result["pending_budget"], 200.0)
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_monthly_bills_from_database")
+    def test_analyze_monthly_bills_empty_month(self, mock_collect_bills):
+        mock_collect_bills.return_value = []
+
+        result = notion_tools.analyze_monthly_bills({"month": "2026-03"}, _build_context())
+
+        self.assertEqual(result["total_bills"], 0)
+        self.assertEqual(result["pending_budget"], 0.0)
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.update_notion_page")
     def test_edit_notion_item_updates_task_payload(self, mock_update_page):
         mock_update_page.return_value = {"id": "task-1", "updated_fields": ["task_name", "done"]}

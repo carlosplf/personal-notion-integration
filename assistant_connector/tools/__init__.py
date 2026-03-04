@@ -10,10 +10,13 @@ from assistant_connector.tools.email_tools import (
 from assistant_connector.tools.meta_tools import list_available_agents, list_available_tools
 from assistant_connector.tools.news_tools import list_tech_news
 from assistant_connector.tools.notion_tools import (
+    analyze_monthly_bills,
     analyze_monthly_expenses,
     create_notion_note,
     create_notion_task,
     edit_notion_item,
+    list_unpaid_monthly_bills,
+    mark_monthly_bill_as_paid,
     list_notion_notes,
     list_notion_tasks,
     register_financial_expense,
@@ -25,6 +28,9 @@ __all__ = [
     "search_contacts",
     "register_financial_expense",
     "analyze_monthly_expenses",
+    "list_unpaid_monthly_bills",
+    "mark_monthly_bill_as_paid",
+    "analyze_monthly_bills",
     "create_notion_note",
     "create_notion_task",
     "edit_notion_item",
