@@ -233,7 +233,7 @@ class TestConversationMemoryStore(unittest.TestCase):
             cancelled_task = memory_store.get_scheduled_task(task_id)
             self.assertEqual(cancelled_task["status"], "cancelled")
 
-    def test_reschedule_recurring_task_requeues_after_success(self):
+    def test_recurring_task_claims_once_per_period(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
             memory_store = ConversationMemoryStore(db_path)
@@ -249,23 +249,60 @@ class TestConversationMemoryStore(unittest.TestCase):
                 now_utc="2026-01-01T10:00:00Z",
                 stale_running_after_seconds=60,
             )
-            memory_store.mark_scheduled_task_succeeded(
+            memory_store.mark_scheduled_task_recurring_succeeded(
                 task_id=task_id,
                 finished_at="2026-01-01T10:00:00Z",
                 response_text="ok",
             )
+            first_state = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(first_state["status"], "pending")
+            self.assertEqual(first_state["scheduled_for"], "2026-01-01T10:00:00Z")
+            self.assertEqual(first_state["last_success_at"], "2026-01-01T10:00:00Z")
 
-            updated = memory_store.reschedule_recurring_task(
-                task_id=task_id,
-                next_scheduled_for="2026-01-02T10:00:00Z",
-                updated_at="2026-01-01T10:00:01Z",
+            second_claim = memory_store.claim_next_scheduled_task(
+                now_utc="2026-01-01T18:00:00Z",
+                stale_running_after_seconds=60,
             )
+            self.assertIsNone(second_claim)
 
-            self.assertTrue(updated)
+            third_claim = memory_store.claim_next_scheduled_task(
+                now_utc="2026-01-02T10:00:00Z",
+                stale_running_after_seconds=60,
+            )
+            self.assertIsNotNone(third_claim)
+            self.assertEqual(third_claim["task_id"], task_id)
+
+    def test_create_recurring_task_in_past_skips_current_elapsed_cycle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            with unittest.mock.patch.object(
+                memory_store,
+                "_utc_now_iso",
+                return_value="2026-03-05T11:50:00Z",
+            ):
+                task_id = memory_store.create_scheduled_task(
+                    user_id="user-1",
+                    channel_id="channel-1",
+                    guild_id=None,
+                    message="Resumo diário",
+                    scheduled_for="2026-03-05T10:00:00Z",
+                    recurrence_pattern="daily",
+                )
+
             persisted = memory_store.get_scheduled_task(task_id)
-            self.assertEqual(persisted["status"], "pending")
-            self.assertEqual(persisted["attempt_count"], 0)
-            self.assertEqual(persisted["scheduled_for"], "2026-01-02T10:00:00Z")
+            self.assertEqual(persisted["last_success_at"], "2026-03-05T10:00:00Z")
+            no_claim_today = memory_store.claim_next_scheduled_task(
+                now_utc="2026-03-05T11:50:00Z",
+                stale_running_after_seconds=60,
+            )
+            self.assertIsNone(no_claim_today)
+            next_claim = memory_store.claim_next_scheduled_task(
+                now_utc="2026-03-06T10:00:00Z",
+                stale_running_after_seconds=60,
+            )
+            self.assertIsNotNone(next_claim)
+            self.assertEqual(next_claim["task_id"], task_id)
 
 
 if __name__ == "__main__":

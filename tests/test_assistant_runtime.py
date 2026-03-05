@@ -334,6 +334,61 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(answer, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
+    def test_runtime_blocks_scheduled_task_tools_during_scheduled_execution(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "create_scheduled_task",
+                        "arguments": "{\"confirmed\":true}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Bloqueio aplicado.",
+            },
+        ]
+        tool_definitions = {
+            "create_scheduled_task": ToolDefinition(
+                name="create_scheduled_task",
+                description="Cria agendamento",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["create_scheduled_task"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user:scheduled:task-1",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="executar tarefa",
+            )
+
+        self.assertEqual(answer, "Bloqueio aplicado.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
+        self.assertIn(
+            "tool_not_allowed_during_scheduled_execution",
+            runtime._openai_client.responses.calls[1]["input"][0]["output"],
+        )
+
     def test_runtime_executes_sensitive_write_tool_with_model_confirmation(self):
         global WRITE_TOOL_CALL_COUNT
         WRITE_TOOL_CALL_COUNT = 0

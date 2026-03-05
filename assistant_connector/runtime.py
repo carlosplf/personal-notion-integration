@@ -11,6 +11,13 @@ from assistant_connector.memory_store import ConversationMemoryStore
 from assistant_connector.models import AgentDefinition, ToolExecutionContext
 from assistant_connector.tool_registry import ToolRegistry
 
+BLOCKED_SCHEDULED_EXECUTION_TOOLS = {
+    "create_scheduled_task",
+    "edit_scheduled_task",
+    "cancel_scheduled_task",
+    "list_scheduled_tasks",
+}
+
 
 class AssistantRuntime:
     def __init__(
@@ -215,6 +222,16 @@ class AssistantRuntime:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        if self._is_scheduled_execution_session(context.session_id):
+            if tool_name in BLOCKED_SCHEDULED_EXECUTION_TOOLS:
+                return {
+                    "error": "tool_not_allowed_during_scheduled_execution",
+                    "tool_name": tool_name,
+                    "details": (
+                        "Scheduled task management tools are blocked during scheduled task execution. "
+                        "Execute the scheduled payload instead of modifying schedules."
+                    ),
+                }
         tool_definition = self._tool_registry.get_tool_definition(tool_name)
         if tool_definition.write_operation and not bool(arguments.get("confirmed", False)):
             return {
@@ -233,6 +250,10 @@ class AssistantRuntime:
                 "tool_name": tool_name,
                 "details": str(error),
             }
+
+    @staticmethod
+    def _is_scheduled_execution_session(session_id: str) -> bool:
+        return ":scheduled:" in str(session_id or "")
 
     def _extract_function_calls(self, response) -> list[dict[str, str]]:
         output_items = self._item_get(response, "output", []) or []

@@ -5,8 +5,11 @@ import os
 import sqlite3
 import threading
 import uuid
+import calendar
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SUPPORTED_RECURRENCE_PATTERNS = {"none", "daily", "weekly", "monthly"}
 
@@ -131,6 +134,20 @@ class ConversationMemoryStore:
         safe_recurrence_pattern = self._normalize_recurrence_pattern(recurrence_pattern)
         now_utc = self._normalize_utc_iso(self._utc_now_iso())
         scheduled_for_utc = self._normalize_utc_iso(scheduled_for)
+        initial_last_success_at = None
+        if safe_recurrence_pattern != "none":
+            schedule_timezone = self._resolve_timezone_name(safe_scheduled_timezone)
+            base_local = datetime.fromisoformat(scheduled_for_utc.replace("Z", "+00:00")).astimezone(schedule_timezone)
+            now_local = datetime.fromisoformat(now_utc.replace("Z", "+00:00")).astimezone(schedule_timezone)
+            if self._is_same_recurrence_period(base_local, now_local, safe_recurrence_pattern):
+                occurrence_start = self._compute_current_occurrence_start_utc(
+                    base_scheduled_for=scheduled_for_utc,
+                    recurrence_pattern=safe_recurrence_pattern,
+                    timezone_name=safe_scheduled_timezone,
+                    reference_utc=now_utc,
+                )
+                if occurrence_start and occurrence_start < now_utc:
+                    initial_last_success_at = occurrence_start
         task_id = uuid.uuid4().hex
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -150,9 +167,10 @@ class ConversationMemoryStore:
                     scheduled_for,
                     next_attempt_at,
                     created_at,
-                    updated_at
+                    updated_at,
+                    last_success_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -168,6 +186,7 @@ class ConversationMemoryStore:
                     scheduled_for_utc,
                     now_utc,
                     now_utc,
+                    initial_last_success_at,
                 ),
             )
             connection.commit()
@@ -220,33 +239,54 @@ class ConversationMemoryStore:
                 """,
                 (safe_now_utc, safe_now_utc, stale_before),
             )
-            cursor = connection.execute(
+            rows = connection.execute(
                 """
                 SELECT *
                 FROM scheduled_tasks
-                WHERE status IN ('pending', 'retrying')
-                  AND next_attempt_at <= ?
-                ORDER BY next_attempt_at ASC, created_at ASC
-                LIMIT 1
-                """,
-                (safe_now_utc,),
-            )
-            row = cursor.fetchone()
-            if row is None:
+                WHERE status IN ('pending', 'retrying', 'failed')
+                ORDER BY
+                    CASE
+                        WHEN status = 'retrying' THEN 0
+                        WHEN status = 'pending' THEN 1
+                        ELSE 2
+                    END,
+                    next_attempt_at ASC,
+                    created_at ASC
+                LIMIT 200
+                """
+            ).fetchall()
+            selected_task = None
+            selected_due_at = None
+            for row in rows:
+                task = dict(row)
+                due_at = self._resolve_task_due_at(task, safe_now_utc)
+                if due_at is None:
+                    continue
+                if selected_due_at is None or due_at < selected_due_at:
+                    selected_task = task
+                    selected_due_at = due_at
+                elif due_at == selected_due_at and selected_task is not None:
+                    if str(task.get("created_at", "")) < str(selected_task.get("created_at", "")):
+                        selected_task = task
+                        selected_due_at = due_at
+
+            if selected_task is None:
                 connection.commit()
                 return None
-            task_id = row["task_id"]
+            task_id = selected_task["task_id"]
             updated = connection.execute(
                 """
                 UPDATE scheduled_tasks
                 SET
                     status = 'running',
-                    attempt_count = attempt_count + 1,
-                    started_at = COALESCE(started_at, ?),
+                    attempt_count = CASE WHEN status = 'failed' THEN 1 ELSE attempt_count + 1 END,
+                    started_at = ?,
+                    finished_at = NULL,
                     locked_at = ?,
-                    updated_at = ?
+                    updated_at = ?,
+                    last_error = CASE WHEN status = 'failed' THEN '' ELSE last_error END
                 WHERE task_id = ?
-                  AND status IN ('pending', 'retrying')
+                  AND status IN ('pending', 'retrying', 'failed')
                 """,
                 (safe_now_utc, safe_now_utc, safe_now_utc, task_id),
             )
@@ -278,7 +318,8 @@ class ConversationMemoryStore:
                     locked_at = NULL,
                     updated_at = ?,
                     last_error = '',
-                    last_response = ?
+                    last_response = ?,
+                    last_success_at = ?
                 WHERE task_id = ?
                   AND status = 'running'
                 """,
@@ -286,6 +327,42 @@ class ConversationMemoryStore:
                     safe_finished_at,
                     safe_finished_at,
                     self._truncate_text(str(response_text), self._max_tool_payload_chars),
+                    safe_finished_at,
+                    task_id,
+                ),
+            )
+            connection.commit()
+        return updated.rowcount == 1
+
+    def mark_scheduled_task_recurring_succeeded(
+        self,
+        *,
+        task_id: str,
+        finished_at: str,
+        response_text: str,
+    ) -> bool:
+        safe_finished_at = self._normalize_utc_iso(finished_at)
+        with self._lock, self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE scheduled_tasks
+                SET
+                    status = 'pending',
+                    attempt_count = 0,
+                    finished_at = ?,
+                    locked_at = NULL,
+                    updated_at = ?,
+                    last_error = '',
+                    last_response = ?,
+                    last_success_at = ?
+                WHERE task_id = ?
+                  AND status = 'running'
+                """,
+                (
+                    safe_finished_at,
+                    safe_finished_at,
+                    self._truncate_text(str(response_text), self._max_tool_payload_chars),
+                    safe_finished_at,
                     task_id,
                 ),
             )
@@ -422,6 +499,7 @@ class ConversationMemoryStore:
             normalized_scheduled_for = self._normalize_utc_iso(scheduled_for)
             set_clauses.append("scheduled_for = ?")
             set_clauses.append("next_attempt_at = ?")
+            set_clauses.append("last_success_at = NULL")
             params.extend([normalized_scheduled_for, normalized_scheduled_for])
         if scheduled_timezone is not None:
             safe_scheduled_timezone = str(scheduled_timezone).strip()
@@ -435,6 +513,7 @@ class ConversationMemoryStore:
         if recurrence_pattern is not None:
             set_clauses.append("recurrence_pattern = ?")
             params.append(self._normalize_recurrence_pattern(recurrence_pattern))
+            set_clauses.append("last_success_at = NULL")
         if max_attempts is not None:
             safe_max_attempts = max(1, int(max_attempts))
             set_clauses.append("max_attempts = ?")
@@ -453,42 +532,6 @@ class ConversationMemoryStore:
                   AND status IN ('pending', 'retrying')
                 """,
                 tuple(params),
-            )
-            connection.commit()
-        return updated.rowcount == 1
-
-    def reschedule_recurring_task(
-        self,
-        *,
-        task_id: str,
-        next_scheduled_for: str,
-        updated_at: str,
-    ) -> bool:
-        normalized_next = self._normalize_utc_iso(next_scheduled_for)
-        normalized_updated_at = self._normalize_utc_iso(updated_at)
-        with self._lock, self._connect() as connection:
-            updated = connection.execute(
-                """
-                UPDATE scheduled_tasks
-                SET
-                    status = 'pending',
-                    attempt_count = 0,
-                    scheduled_for = ?,
-                    next_attempt_at = ?,
-                    locked_at = NULL,
-                    started_at = NULL,
-                    finished_at = NULL,
-                    updated_at = ?,
-                    last_error = ''
-                WHERE task_id = ?
-                  AND status = 'succeeded'
-                """,
-                (
-                    normalized_next,
-                    normalized_next,
-                    normalized_updated_at,
-                    task_id,
-                ),
             )
             connection.commit()
         return updated.rowcount == 1
@@ -551,6 +594,128 @@ class ConversationMemoryStore:
         parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
         shifted = parsed + timedelta(seconds=int(delta_seconds))
         return shifted.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _resolve_task_due_at(self, task: dict[str, Any], now_utc: str) -> str | None:
+        status = str(task.get("status", "")).strip().lower()
+        try:
+            recurrence = self._normalize_recurrence_pattern(task.get("recurrence_pattern"))
+        except ValueError:
+            return None
+        safe_now_utc = self._normalize_utc_iso(now_utc)
+
+        if status == "retrying":
+            retry_at = self._normalize_utc_iso(str(task.get("next_attempt_at", "")))
+            return retry_at if retry_at <= safe_now_utc else None
+
+        if recurrence == "none":
+            if status != "pending":
+                return None
+            next_attempt_at = self._normalize_utc_iso(str(task.get("next_attempt_at", "")))
+            return next_attempt_at if next_attempt_at <= safe_now_utc else None
+
+        if status not in {"pending", "failed"}:
+            return None
+        try:
+            occurrence_start = self._compute_current_occurrence_start_utc(
+                base_scheduled_for=str(task.get("scheduled_for", "")),
+                recurrence_pattern=recurrence,
+                timezone_name=str(task.get("scheduled_timezone", "UTC")),
+                reference_utc=safe_now_utc,
+            )
+        except ValueError:
+            return None
+        if occurrence_start is None:
+            return None
+
+        last_success_raw = task.get("last_success_at")
+        if last_success_raw not in (None, ""):
+            last_success_at = self._normalize_utc_iso(str(last_success_raw))
+        else:
+            last_success_at = ""
+        if last_success_at and last_success_at >= occurrence_start:
+            return None
+        if status == "failed":
+            finished_raw = task.get("finished_at")
+            if finished_raw not in (None, ""):
+                finished_at = self._normalize_utc_iso(str(finished_raw))
+            else:
+                finished_at = ""
+            if finished_at and finished_at >= occurrence_start:
+                return None
+        return occurrence_start
+
+    @staticmethod
+    def _resolve_timezone_name(timezone_value: str):
+        requested = str(timezone_value or "").strip() or "UTC"
+        gmt_match = re.fullmatch(r"(?:GMT|UTC)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", requested, re.IGNORECASE)
+        if gmt_match:
+            signal = 1 if gmt_match.group(1) == "+" else -1
+            hours = int(gmt_match.group(2))
+            minutes = int(gmt_match.group(3) or 0)
+            if hours > 23 or minutes > 59:
+                raise ValueError("Invalid GMT/UTC offset timezone")
+            offset = signal * timedelta(hours=hours, minutes=minutes)
+            label = f"UTC{gmt_match.group(1)}{hours:02d}:{minutes:02d}"
+            return timezone(offset, name=label)
+        return ZoneInfo(requested)
+
+    @staticmethod
+    def _add_months_preserving_day(base_datetime: datetime, months_to_add: int) -> datetime:
+        target_index = (base_datetime.month - 1) + int(months_to_add)
+        year = base_datetime.year + target_index // 12
+        month = (target_index % 12) + 1
+        last_day = calendar.monthrange(year, month)[1]
+        day = min(base_datetime.day, last_day)
+        return base_datetime.replace(year=year, month=month, day=day)
+
+    @staticmethod
+    def _is_same_recurrence_period(base_local: datetime, reference_local: datetime, recurrence_pattern: str) -> bool:
+        if recurrence_pattern == "daily":
+            return base_local.date() == reference_local.date()
+        if recurrence_pattern == "weekly":
+            return base_local.isocalendar()[:2] == reference_local.isocalendar()[:2]
+        if recurrence_pattern == "monthly":
+            return (base_local.year, base_local.month) == (reference_local.year, reference_local.month)
+        return False
+
+    def _compute_current_occurrence_start_utc(
+        self,
+        *,
+        base_scheduled_for: str,
+        recurrence_pattern: str,
+        timezone_name: str,
+        reference_utc: str,
+    ) -> str | None:
+        normalized_base = self._normalize_utc_iso(base_scheduled_for)
+        normalized_reference = self._normalize_utc_iso(reference_utc)
+        base = datetime.fromisoformat(normalized_base.replace("Z", "+00:00"))
+        reference = datetime.fromisoformat(normalized_reference.replace("Z", "+00:00"))
+        schedule_timezone = self._resolve_timezone_name(timezone_name)
+        base_local = base.astimezone(schedule_timezone)
+        reference_local = reference.astimezone(schedule_timezone)
+        if reference_local < base_local:
+            return None
+
+        candidate = base_local
+        if recurrence_pattern == "daily":
+            step = max((reference_local.date() - base_local.date()).days, 0)
+            candidate = base_local + timedelta(days=step)
+            if candidate > reference_local:
+                candidate -= timedelta(days=1)
+        elif recurrence_pattern == "weekly":
+            weeks = max((reference_local.date() - base_local.date()).days // 7, 0)
+            candidate = base_local + timedelta(days=weeks * 7)
+            if candidate > reference_local:
+                candidate -= timedelta(days=7)
+        elif recurrence_pattern == "monthly":
+            months = max((reference_local.year - base_local.year) * 12 + (reference_local.month - base_local.month), 0)
+            candidate = self._add_months_preserving_day(base_local, months)
+            if candidate > reference_local:
+                candidate = self._add_months_preserving_day(candidate, -1)
+        else:
+            raise ValueError("Unsupported recurrence_pattern")
+
+        return candidate.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     @staticmethod
     def _truncate_text(text: str, limit: int) -> str:
@@ -650,6 +815,7 @@ class ConversationMemoryStore:
                     locked_at TEXT,
                     started_at TEXT,
                     finished_at TEXT,
+                    last_success_at TEXT,
                     last_error TEXT NOT NULL DEFAULT '',
                     last_response TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -681,9 +847,13 @@ class ConversationMemoryStore:
             connection.execute(
                 "ALTER TABLE scheduled_tasks ADD COLUMN recurrence_pattern TEXT NOT NULL DEFAULT 'none'"
             )
+        if "last_success_at" not in columns:
+            connection.execute(
+                "ALTER TABLE scheduled_tasks ADD COLUMN last_success_at TEXT"
+            )
 
     @staticmethod
-    def _normalize_recurrence_pattern(value: str | None) -> str:
+    def _normalize_recurrence_pattern(value: object | None) -> str:
         normalized = str(value or "none").strip().lower() or "none"
         if normalized not in SUPPORTED_RECURRENCE_PATTERNS:
             raise ValueError("Unsupported recurrence_pattern. Use none, daily, weekly or monthly.")

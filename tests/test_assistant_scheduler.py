@@ -97,7 +97,10 @@ class TestAssistantScheduler(unittest.TestCase):
                 final_state = memory_store.get_scheduled_task(task_id)
                 self.assertEqual(final_state["status"], "succeeded")
                 self.assertEqual(len(runtime.calls), 1)
-                self.assertEqual(runtime.calls[0]["message"], "hello from scheduler")
+                self.assertIn("hello from scheduler", runtime.calls[0]["message"])
+                self.assertIn("execução automática de tarefa agendada", runtime.calls[0]["message"])
+                self.assertIn(":scheduled:", runtime.calls[0]["session_id"])
+                self.assertTrue(runtime.calls[0]["session_id"].endswith(task_id))
             finally:
                 runner.stop()
 
@@ -160,7 +163,7 @@ class TestAssistantScheduler(unittest.TestCase):
                 runner.stop()
             self.assertEqual(callback.call_count, 1)
 
-    def test_run_scheduled_task_reschedules_daily_recurrence(self):
+    def test_run_scheduled_task_daily_recurrence_runs_once_per_day(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             memory_store = ConversationMemoryStore(os.path.join(temp_dir, "assistant_memory.sqlite3"))
             runtime = _FakeRuntime(memory_store, should_fail=False)
@@ -183,10 +186,26 @@ class TestAssistantScheduler(unittest.TestCase):
             self.assertEqual(processed, 1)
             state = memory_store.get_scheduled_task(task_id)
             self.assertEqual(state["status"], "pending")
-            self.assertEqual(state["scheduled_for"], "2026-01-02T10:00:00Z")
-            self.assertEqual(state["next_attempt_at"], "2026-01-02T10:00:00Z")
+            self.assertEqual(state["scheduled_for"], "2026-01-01T10:00:00Z")
+            self.assertEqual(state["last_success_at"], "2026-01-01T10:00:00Z")
+            self.assertEqual(state["attempt_count"], 0)
 
-    def test_run_scheduled_task_reschedules_weekly_recurrence(self):
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-01T18:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 0)
+
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-02T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 1)
+            self.assertEqual(len(runtime.calls), 2)
+
+    def test_run_scheduled_task_weekly_recurrence_runs_by_rule(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             memory_store = ConversationMemoryStore(os.path.join(temp_dir, "assistant_memory.sqlite3"))
             runtime = _FakeRuntime(memory_store, should_fail=False)
@@ -209,10 +228,23 @@ class TestAssistantScheduler(unittest.TestCase):
             self.assertEqual(processed, 1)
             state = memory_store.get_scheduled_task(task_id)
             self.assertEqual(state["status"], "pending")
-            self.assertEqual(state["scheduled_for"], "2026-01-08T10:00:00Z")
-            self.assertEqual(state["next_attempt_at"], "2026-01-08T10:00:00Z")
+            self.assertEqual(state["scheduled_for"], "2026-01-01T10:00:00Z")
+            self.assertEqual(state["last_success_at"], "2026-01-01T10:00:00Z")
 
-    def test_run_scheduled_task_reschedules_monthly_recurrence(self):
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-07T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 0)
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-08T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 1)
+
+    def test_run_scheduled_task_monthly_recurrence_runs_by_rule(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             memory_store = ConversationMemoryStore(os.path.join(temp_dir, "assistant_memory.sqlite3"))
             runtime = _FakeRuntime(memory_store, should_fail=False)
@@ -235,8 +267,59 @@ class TestAssistantScheduler(unittest.TestCase):
             self.assertEqual(processed, 1)
             state = memory_store.get_scheduled_task(task_id)
             self.assertEqual(state["status"], "pending")
-            self.assertEqual(state["scheduled_for"], "2026-02-28T10:00:00Z")
-            self.assertEqual(state["next_attempt_at"], "2026-02-28T10:00:00Z")
+            self.assertEqual(state["scheduled_for"], "2026-01-31T10:00:00Z")
+            self.assertEqual(state["last_success_at"], "2026-01-31T10:00:00Z")
+
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-02-27T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 0)
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-02-28T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 1)
+
+    def test_recurring_task_failed_cycle_runs_again_next_period(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            memory_store = ConversationMemoryStore(os.path.join(temp_dir, "assistant_memory.sqlite3"))
+            runtime = _FakeRuntime(memory_store, should_fail=True)
+            service = AssistantService(runtime=runtime)
+            task_id = service.schedule_chat(
+                user_id="u1",
+                channel_id="c1",
+                guild_id=None,
+                message="daily retry cycle",
+                scheduled_for="2026-01-01T10:00:00Z",
+                recurrence_pattern="daily",
+                max_attempts=1,
+            )
+
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-01T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 1)
+            first_state = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(first_state["status"], "failed")
+
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-01T11:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 0)
+
+            processed = service.run_scheduled_tasks_once(
+                now_utc="2026-01-02T10:00:00Z",
+                retry_base_seconds=60,
+                retry_max_seconds=60,
+            )
+            self.assertEqual(processed, 1)
 
 
 if __name__ == "__main__":

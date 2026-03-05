@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import calendar
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
-import re
-from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -13,8 +10,6 @@ from assistant_connector.config_loader import load_assistant_configuration
 from assistant_connector.memory_store import ConversationMemoryStore
 from assistant_connector.runtime import AssistantRuntime
 from assistant_connector.tool_registry import ToolRegistry
-
-SUPPORTED_RECURRENCE_PATTERNS = {"none", "daily", "weekly", "monthly"}
 
 
 class AssistantService:
@@ -121,12 +116,19 @@ class AssistantService:
         if task is None:
             return {"processed": False}
         task_id = str(task["task_id"])
+        scheduled_session_id = self.build_scheduled_session_id(
+            task_id=task_id,
+            user_id=str(task["user_id"]),
+            channel_id=str(task["channel_id"]),
+            guild_id=str(task["guild_id"]) if task["guild_id"] else None,
+        )
         try:
-            response_text = self.chat(
+            response_text = self._runtime.process_user_message(
+                session_id=scheduled_session_id,
                 user_id=str(task["user_id"]),
                 channel_id=str(task["channel_id"]),
                 guild_id=str(task["guild_id"]) if task["guild_id"] else None,
-                message=str(task["message"]),
+                message=_build_scheduled_execution_message(str(task["message"])),
             )
         except Exception as error:
             attempt_count = int(task["attempt_count"])
@@ -157,33 +159,20 @@ class AssistantService:
             return {"processed": True, "status": "retrying", "task": task}
 
         try:
-            self._runtime._memory_store.mark_scheduled_task_succeeded(
-                task_id=task_id,
-                finished_at=current_time,
-                response_text=response_text,
-            )
-            persisted = self._runtime._memory_store.get_scheduled_task(task_id)
-            recurrence_pattern = _normalize_recurrence_pattern(task.get("recurrence_pattern"))
-            if recurrence_pattern != "none":
-                next_scheduled_for = _compute_next_recurring_utc(
-                    base_scheduled_for=str(task["scheduled_for"]),
-                    recurrence_pattern=recurrence_pattern,
-                    timezone_name=str(task.get("scheduled_timezone") or "UTC"),
-                    reference_utc=current_time,
+            recurrence_pattern = str(task.get("recurrence_pattern", "none")).strip().lower() or "none"
+            if recurrence_pattern == "none":
+                self._runtime._memory_store.mark_scheduled_task_succeeded(
+                    task_id=task_id,
+                    finished_at=current_time,
+                    response_text=response_text,
                 )
-                try:
-                    self._runtime._memory_store.reschedule_recurring_task(
-                        task_id=task_id,
-                        next_scheduled_for=next_scheduled_for,
-                        updated_at=current_time,
-                    )
-                    persisted = self._runtime._memory_store.get_scheduled_task(task_id) or persisted
-                except Exception as recurrence_error:
-                    self._log_exception(
-                        "Failed to reschedule recurring task %s: %s",
-                        task_id,
-                        recurrence_error,
-                    )
+            else:
+                self._runtime._memory_store.mark_scheduled_task_recurring_succeeded(
+                    task_id=task_id,
+                    finished_at=current_time,
+                    response_text=response_text,
+                )
+            persisted = self._runtime._memory_store.get_scheduled_task(task_id)
             return {
                 "processed": True,
                 "status": "succeeded",
@@ -260,6 +249,10 @@ class AssistantService:
     @staticmethod
     def build_session_id(*, user_id: str, channel_id: str, guild_id: str | None) -> str:
         return f"{guild_id or 'dm'}:{channel_id}:{user_id}"
+
+    @staticmethod
+    def build_scheduled_session_id(*, task_id: str, user_id: str, channel_id: str, guild_id: str | None) -> str:
+        return f"{AssistantService.build_session_id(user_id=user_id, channel_id=channel_id, guild_id=guild_id)}:scheduled:{task_id}"
 
 
 def create_assistant_service(
@@ -364,76 +357,15 @@ def _get_env_int(name: str, default: int, *, minimum: int) -> int:
     return max(parsed, minimum)
 
 
-def _normalize_recurrence_pattern(value: object) -> str:
-    normalized = str(value or "none").strip().lower() or "none"
-    if normalized not in SUPPORTED_RECURRENCE_PATTERNS:
-        return "none"
-    return normalized
-
-
-def _resolve_timezone_for_schedule(timezone_name: str):
-    requested = str(timezone_name or "").strip() or "UTC"
-    gmt_match = re.fullmatch(r"(?:GMT|UTC)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", requested, re.IGNORECASE)
-    if gmt_match:
-        signal = 1 if gmt_match.group(1) == "+" else -1
-        hours = int(gmt_match.group(2))
-        minutes = int(gmt_match.group(3) or 0)
-        if hours > 23 or minutes > 59:
-            raise ValueError("Invalid GMT/UTC offset timezone")
-        offset = signal * timedelta(hours=hours, minutes=minutes)
-        label = f"UTC{gmt_match.group(1)}{hours:02d}:{minutes:02d}"
-        return timezone(offset, name=label)
-    return ZoneInfo(requested)
-
-
-def _add_months_preserving_day(base_datetime: datetime, months_to_add: int) -> datetime:
-    target_index = (base_datetime.month - 1) + int(months_to_add)
-    year = base_datetime.year + target_index // 12
-    month = (target_index % 12) + 1
-    last_day = calendar.monthrange(year, month)[1]
-    day = min(base_datetime.day, last_day)
-    return base_datetime.replace(year=year, month=month, day=day)
-
-
-def _compute_next_recurring_utc(
-    *,
-    base_scheduled_for: str,
-    recurrence_pattern: str,
-    timezone_name: str,
-    reference_utc: str,
-) -> str:
-    normalized_base = str(base_scheduled_for).strip()
-    normalized_reference = str(reference_utc).strip()
-    if normalized_base.endswith("Z"):
-        normalized_base = f"{normalized_base[:-1]}+00:00"
-    if normalized_reference.endswith("Z"):
-        normalized_reference = f"{normalized_reference[:-1]}+00:00"
-    base_utc = datetime.fromisoformat(normalized_base)
-    reference = datetime.fromisoformat(normalized_reference)
-    if base_utc.tzinfo is None:
-        base_utc = base_utc.replace(tzinfo=timezone.utc)
-    else:
-        base_utc = base_utc.astimezone(timezone.utc)
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
-    else:
-        reference = reference.astimezone(timezone.utc)
-    schedule_timezone = _resolve_timezone_for_schedule(timezone_name)
-    candidate = base_utc.astimezone(schedule_timezone)
-    reference_local = reference.astimezone(schedule_timezone)
-
-    attempts = 0
-    while candidate <= reference_local and attempts < 500:
-        if recurrence_pattern == "daily":
-            candidate += timedelta(days=1)
-        elif recurrence_pattern == "weekly":
-            candidate += timedelta(days=7)
-        elif recurrence_pattern == "monthly":
-            candidate = _add_months_preserving_day(candidate, 1)
-        else:
-            raise ValueError("Unsupported recurrence pattern")
-        attempts += 1
-    return candidate.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def _build_scheduled_execution_message(task_message: str) -> str:
+    message = str(task_message or "").strip()
+    return (
+        "Contexto: execução automática de tarefa agendada.\n"
+        "Ação obrigatória: execute o pedido abaixo agora e devolva o resultado final para o usuário.\n"
+        "Regra: não criar, editar, listar ou cancelar tarefas agendadas durante esta execução.\n\n"
+        "Pedido agendado:\n"
+        f"{message}"
+    )
 
 
 def _load_memories(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
