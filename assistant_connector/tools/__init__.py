@@ -21,6 +21,13 @@ from assistant_connector.tools.notion_tools import (
     list_notion_tasks,
     register_financial_expense,
 )
+from assistant_connector.tools.scheduled_task_tools import (
+    cancel_scheduled_task,
+    create_scheduled_task,
+    edit_scheduled_task,
+    list_scheduled_tasks,
+)
+from assistant_connector.tools.system_tools import get_application_hardware_status
 
 __all__ = [
     "create_calendar_event",
@@ -33,10 +40,13 @@ __all__ = [
     "analyze_monthly_bills",
     "create_notion_note",
     "create_notion_task",
+    "create_scheduled_task",
     "edit_notion_item",
+    "edit_scheduled_task",
     "analyze_email_attachment",
     "list_notion_notes",
     "list_notion_tasks",
+    "list_scheduled_tasks",
     "read_email",
     "search_email_attachments",
     "search_emails",
@@ -44,4 +54,6 @@ __all__ = [
     "list_available_agents",
     "list_available_tools",
     "list_tech_news",
+    "cancel_scheduled_task",
+    "get_application_hardware_status",
 ]

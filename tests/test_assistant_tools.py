@@ -11,6 +11,8 @@ from assistant_connector.tools import (
     meta_tools,
     news_tools,
     notion_tools,
+    scheduled_task_tools,
+    system_tools,
 )
 
 
@@ -480,6 +482,143 @@ class TestAssistantTools(unittest.TestCase):
 
         self.assertEqual(tools_payload["agent_id"], "personal_assistant")
         self.assertEqual(agents_payload["active_agent_id"], "personal_assistant")
+
+    def test_scheduled_task_tools_create_list_edit_cancel(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(
+                os.environ,
+                {"ASSISTANT_MEMORY_PATH": db_path, "TIMEZONE": "America/Sao_Paulo"},
+                clear=False,
+            ):
+                created = scheduled_task_tools.create_scheduled_task(
+                    {
+                        "message": "Enviar resumo no fim do dia",
+                        "scheduled_for": "2026-03-05T20:00:00",
+                        "recurrence": "weekly",
+                        "max_attempts": 2,
+                        "notify_email_to": "user@example.com",
+                    },
+                    context,
+                )
+                task_id = created["task"]["task_id"]
+                self.assertEqual(created["status"], "created")
+                self.assertEqual(created["task"]["status"], "pending")
+                self.assertEqual(created["task"]["scheduled_for"], "2026-03-05T23:00:00Z")
+                self.assertEqual(created["task"]["scheduled_timezone"], "America/Sao_Paulo")
+                self.assertEqual(created["task"]["notify_email_to"], "user@example.com")
+                self.assertEqual(created["task"]["recurrence_pattern"], "weekly")
+
+                listed = scheduled_task_tools.list_scheduled_tasks({"limit": 10}, context)
+                self.assertGreaterEqual(listed["total"], 1)
+                self.assertTrue(any(task["task_id"] == task_id for task in listed["tasks"]))
+
+                edited = scheduled_task_tools.edit_scheduled_task(
+                    {
+                        "task_id": task_id,
+                        "message": "Enviar resumo e próximos passos",
+                        "scheduled_for": "2026-03-05T21:00:00",
+                        "timezone": "UTC",
+                        "notify_email_to": "",
+                        "recurrence": "monthly",
+                    },
+                    context,
+                )
+                self.assertEqual(edited["status"], "updated")
+                self.assertIn("próximos passos", edited["task"]["message"])
+                self.assertEqual(edited["task"]["scheduled_for"], "2026-03-05T21:00:00Z")
+                self.assertEqual(edited["task"]["scheduled_timezone"], "UTC")
+                self.assertEqual(edited["task"]["notify_email_to"], "")
+                self.assertEqual(edited["task"]["recurrence_pattern"], "monthly")
+
+                cancelled = scheduled_task_tools.cancel_scheduled_task({"task_id": task_id}, context)
+                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertEqual(cancelled["task"]["status"], "cancelled")
+
+    def test_scheduled_task_tools_allow_authorized_user_to_cancel_any_task(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(
+                os.environ,
+                {
+                    "ASSISTANT_MEMORY_PATH": db_path,
+                    "DISCORD_ALLOWED_USER_ID": "user",
+                },
+                clear=False,
+            ):
+                created = scheduled_task_tools.create_scheduled_task(
+                    {
+                        "message": "Executar ação",
+                        "scheduled_for": "2026-03-05T20:00:00Z",
+                        "user_id": "other-user",
+                    },
+                    context,
+                )
+                task_id = created["task"]["task_id"]
+                cancelled = scheduled_task_tools.cancel_scheduled_task({"task_id": task_id}, context)
+                self.assertEqual(cancelled["status"], "cancelled")
+
+    def test_scheduled_task_tools_create_uses_context_when_ids_are_empty(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(os.environ, {"ASSISTANT_MEMORY_PATH": db_path}, clear=False):
+                created = scheduled_task_tools.create_scheduled_task(
+                    {
+                        "message": "Executar ação",
+                        "scheduled_for": "2026-03-05T20:00:00Z",
+                        "user_id": "",
+                        "channel_id": "",
+                        "guild_id": "",
+                    },
+                    context,
+                )
+                task = created["task"]
+                self.assertEqual(task["user_id"], "user")
+                self.assertEqual(task["channel_id"], "channel")
+                self.assertEqual(task["guild_id"], "guild")
+
+    def test_scheduled_task_tools_list_returns_orphan_for_authorized_user(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(
+                os.environ,
+                {
+                    "ASSISTANT_MEMORY_PATH": db_path,
+                    "DISCORD_ALLOWED_USER_ID": "user",
+                },
+                clear=False,
+            ):
+                memory_store = scheduled_task_tools._build_memory_store()
+                task_id = memory_store.create_scheduled_task(
+                    user_id="",
+                    channel_id="channel",
+                    guild_id="guild",
+                    message="Executar ação",
+                    scheduled_for="2026-03-05T20:00:00Z",
+                )
+                listed = scheduled_task_tools.list_scheduled_tasks({}, context)
+                self.assertTrue(any(task["task_id"] == task_id for task in listed["tasks"]))
+
+    def test_get_application_hardware_status_returns_expected_fields(self):
+        with patch.object(
+            system_tools.app_health,
+            "get_health_snapshot",
+            return_value={
+                "bot_status": "online",
+                "task_checker_status": "running",
+                "uptime_seconds": 123,
+            },
+        ):
+            with patch.object(system_tools, "_get_process_rss_bytes", return_value=50 * 1024 * 1024):
+                payload = system_tools.get_application_hardware_status({}, _build_context())
+        self.assertEqual(payload["bot_status"], "online")
+        self.assertEqual(payload["task_checker_status"], "running")
+        self.assertEqual(payload["uptime_seconds"], 123)
+        self.assertEqual(payload["memory_total_mb"], 50.0)
 
     @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
     def test_send_email_applies_signature_and_prefix(self, mock_send_custom_email):

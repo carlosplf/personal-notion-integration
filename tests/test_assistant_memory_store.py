@@ -2,11 +2,16 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from assistant_connector.memory_store import ConversationMemoryStore
 
 
 class TestConversationMemoryStore(unittest.TestCase):
+    @staticmethod
+    def _utc_iso() -> str:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
     def test_append_and_read_recent_messages(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
@@ -113,6 +118,154 @@ class TestConversationMemoryStore(unittest.TestCase):
                     "SELECT COUNT(*) FROM tool_calls WHERE session_id='session-1'"
                 ).fetchone()
             self.assertEqual(row[0], 0)
+
+    def test_scheduled_task_lifecycle_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            now = self._utc_iso()
+            task_id = memory_store.create_scheduled_task(
+                user_id="user-1",
+                channel_id="channel-1",
+                guild_id="guild-1",
+                message="Ping assistant",
+                scheduled_for=now,
+                max_attempts=2,
+            )
+
+            claimed = memory_store.claim_next_scheduled_task(
+                now_utc=now,
+                stale_running_after_seconds=60,
+            )
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed["task_id"], task_id)
+            self.assertEqual(claimed["status"], "running")
+            self.assertEqual(claimed["attempt_count"], 1)
+
+            self.assertTrue(
+                memory_store.mark_scheduled_task_succeeded(
+                    task_id=task_id,
+                    finished_at=now,
+                    response_text="Done",
+                )
+            )
+            persisted = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(persisted["status"], "succeeded")
+            self.assertEqual(persisted["last_response"], "Done")
+            self.assertEqual(persisted["scheduled_timezone"], "UTC")
+            self.assertEqual(persisted["notify_email_to"], "")
+            self.assertEqual(persisted["recurrence_pattern"], "none")
+
+    def test_claim_recovers_stale_running_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            task_id = memory_store.create_scheduled_task(
+                user_id="user-1",
+                channel_id="channel-1",
+                guild_id=None,
+                message="Ping assistant",
+                scheduled_for="2026-01-01T10:00:00Z",
+                max_attempts=3,
+            )
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET status = 'running', locked_at = '2026-01-01T09:00:00Z', attempt_count = 1
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                )
+                connection.commit()
+
+            claimed = memory_store.claim_next_scheduled_task(
+                now_utc="2026-01-01T10:10:00Z",
+                stale_running_after_seconds=60,
+            )
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed["task_id"], task_id)
+            self.assertEqual(claimed["status"], "running")
+            self.assertEqual(claimed["attempt_count"], 2)
+
+    def test_list_update_and_cancel_scheduled_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            task_id = memory_store.create_scheduled_task(
+                user_id="user-1",
+                channel_id="channel-1",
+                guild_id=None,
+                message="Mensagem inicial",
+                scheduled_for="2026-01-01T10:00:00Z",
+                notify_email_to="user@example.com",
+                max_attempts=3,
+            )
+
+            listed = memory_store.list_scheduled_tasks(limit=10, user_id="user-1")
+            self.assertTrue(any(task["task_id"] == task_id for task in listed))
+
+            updated = memory_store.update_scheduled_task(
+                task_id=task_id,
+                updated_at="2026-01-01T09:00:00Z",
+                message="Mensagem editada",
+                scheduled_for="2026-01-01T11:00:00Z",
+                scheduled_timezone="America/Sao_Paulo",
+                notify_email_to="new@example.com",
+                max_attempts=4,
+                recurrence_pattern="weekly",
+            )
+            self.assertTrue(updated)
+            persisted = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(persisted["message"], "Mensagem editada")
+            self.assertEqual(persisted["scheduled_for"], "2026-01-01T11:00:00Z")
+            self.assertEqual(persisted["scheduled_timezone"], "America/Sao_Paulo")
+            self.assertEqual(persisted["notify_email_to"], "new@example.com")
+            self.assertEqual(persisted["max_attempts"], 4)
+            self.assertEqual(persisted["recurrence_pattern"], "weekly")
+
+            cancelled = memory_store.cancel_scheduled_task(
+                task_id=task_id,
+                cancelled_at="2026-01-01T09:10:00Z",
+            )
+            self.assertTrue(cancelled)
+            cancelled_task = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(cancelled_task["status"], "cancelled")
+
+    def test_reschedule_recurring_task_requeues_after_success(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+            task_id = memory_store.create_scheduled_task(
+                user_id="user-1",
+                channel_id="channel-1",
+                guild_id=None,
+                message="Mensagem recorrente",
+                scheduled_for="2026-01-01T10:00:00Z",
+                recurrence_pattern="daily",
+            )
+            memory_store.claim_next_scheduled_task(
+                now_utc="2026-01-01T10:00:00Z",
+                stale_running_after_seconds=60,
+            )
+            memory_store.mark_scheduled_task_succeeded(
+                task_id=task_id,
+                finished_at="2026-01-01T10:00:00Z",
+                response_text="ok",
+            )
+
+            updated = memory_store.reschedule_recurring_task(
+                task_id=task_id,
+                next_scheduled_for="2026-01-02T10:00:00Z",
+                updated_at="2026-01-01T10:00:01Z",
+            )
+
+            self.assertTrue(updated)
+            persisted = memory_store.get_scheduled_task(task_id)
+            self.assertEqual(persisted["status"], "pending")
+            self.assertEqual(persisted["attempt_count"], 0)
+            self.assertEqual(persisted["scheduled_for"], "2026-01-02T10:00:00Z")
 
 
 if __name__ == "__main__":

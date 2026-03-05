@@ -4,6 +4,7 @@ import unittest
 import unittest.mock
 import asyncio
 import datetime
+import os
 
 sys.modules.setdefault("discord", types.SimpleNamespace())
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
@@ -277,6 +278,62 @@ class TestDiscordBot(unittest.TestCase):
         response = discord_bot.build_day_response([], [])
         self.assertIn("Sem tarefas do Notion para hoje", response)
         self.assertIn("Sem eventos na agenda para hoje", response)
+
+    def test_build_scheduled_tasks_response_contains_task_data(self):
+        response = discord_bot.build_scheduled_tasks_response(
+            [
+                {
+                    "task_id": "abc123",
+                    "status": "pending",
+                    "next_attempt_at": "2026-03-05T21:00:00Z",
+                    "message": "Enviar resumo semanal",
+                    "recurrence_pattern": "weekly",
+                }
+            ]
+        )
+        self.assertIn("Tarefas agendadas", response)
+        self.assertIn("abc123", response)
+        self.assertIn("pending", response)
+        self.assertIn("semanal", response)
+
+    def test_normalize_scheduler_timestamp_uses_env_timezone_for_naive_values(self):
+        with unittest.mock.patch.dict(os.environ, {"TIMEZONE": "America/Sao_Paulo"}, clear=False):
+            normalized, timezone_name = discord_bot._normalize_scheduler_timestamp("2026-03-05T18:00:00")
+        self.assertEqual(normalized, "2026-03-05T21:00:00Z")
+        self.assertEqual(timezone_name, "America/Sao_Paulo")
+
+    def test_normalize_scheduler_timestamp_converts_to_utc(self):
+        normalized, timezone_name = discord_bot._normalize_scheduler_timestamp("2026-03-05T18:00:00-03:00")
+        self.assertEqual(normalized, "2026-03-05T21:00:00Z")
+        self.assertIn("-03:00", timezone_name)
+
+    def test_normalize_scheduler_timestamp_allows_override_timezone(self):
+        with unittest.mock.patch.dict(os.environ, {"TIMEZONE": "UTC"}, clear=False):
+            normalized, timezone_name = discord_bot._normalize_scheduler_timestamp(
+                "2026-03-05T18:00:00",
+                "America/Sao_Paulo",
+            )
+        self.assertEqual(normalized, "2026-03-05T21:00:00Z")
+        self.assertEqual(timezone_name, "America/Sao_Paulo")
+
+    def test_scheduler_enabled_parsing(self):
+        with unittest.mock.patch.dict(os.environ, {"ASSISTANT_SCHEDULER_ENABLED": "0"}, clear=False):
+            self.assertFalse(discord_bot._is_scheduler_enabled())
+        with unittest.mock.patch.dict(os.environ, {"ASSISTANT_SCHEDULER_ENABLED": "true"}, clear=False):
+            self.assertTrue(discord_bot._is_scheduler_enabled())
+
+    def test_run_discord_bot_stops_scheduler_on_shutdown(self):
+        fake_runner = unittest.mock.Mock()
+        fake_client = unittest.mock.Mock()
+        fake_client.assistant_scheduler_runner_getter = unittest.mock.Mock(return_value=fake_runner)
+        with unittest.mock.patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "token"}, clear=False):
+            with unittest.mock.patch.object(discord_bot, "create_discord_client", return_value=fake_client):
+                with unittest.mock.patch.object(discord_bot.app_health, "mark_app_started") as mark_started:
+                    discord_bot.run_discord_bot()
+
+        fake_client.run.assert_called_once_with("token")
+        fake_runner.stop.assert_called_once()
+        mark_started.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -85,6 +85,182 @@
       }
     },
     {
+      "name": "list_scheduled_tasks",
+      "description": "Lista tarefas agendadas persistidas no SQLite do assistente.",
+      "handler": "assistant_connector.tools.scheduled_task_tools:list_scheduled_tasks",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filtra por status (pending, retrying, running, succeeded, failed, cancelled)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de tarefas retornadas.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "include_all_users": {
+            "type": "boolean",
+            "description": "Quando true, ignora filtro do usuário atual."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_scheduled_task",
+      "description": "Cria uma nova tarefa agendada no SQLite para execução futura via scheduler. O resultado é entregue sempre por DM no Discord e opcionalmente por email.",
+      "handler": "assistant_connector.tools.scheduled_task_tools:create_scheduled_task",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Mensagem a ser executada pelo assistente."
+          },
+          "scheduled_for": {
+            "type": "string",
+            "description": "Data/hora ISO 8601. Se vier sem timezone, usa TIMEZONE do ambiente ou o campo timezone."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Timezone opcional (ex.: America/Sao_Paulo ou GMT-3) para interpretar scheduled_for sem offset."
+          },
+          "notify_email_to": {
+            "type": "string",
+            "description": "Email opcional para receber também o resultado da tarefa (além da DM no Discord)."
+          },
+          "recurrence": {
+            "type": "string",
+            "description": "Recorrência opcional da tarefa.",
+            "enum": ["none", "daily", "weekly", "monthly"]
+          },
+          "max_attempts": {
+            "type": "integer",
+            "description": "Total máximo de tentativas.",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Usuário alvo opcional; padrão é o usuário atual."
+          },
+          "channel_id": {
+            "type": "string",
+            "description": "Canal alvo opcional; padrão é o canal atual."
+          },
+          "guild_id": {
+            "type": "string",
+            "description": "Servidor alvo opcional; padrão é o servidor atual (ou null em DM)."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "message",
+          "scheduled_for"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_scheduled_task",
+      "description": "Edita tarefa agendada (pendente/retrying) no SQLite.",
+      "handler": "assistant_connector.tools.scheduled_task_tools:edit_scheduled_task",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "ID da tarefa agendada."
+          },
+          "message": {
+            "type": "string",
+            "description": "Nova mensagem da tarefa."
+          },
+          "scheduled_for": {
+            "type": "string",
+            "description": "Nova data/hora ISO 8601. Se vier sem timezone, usa TIMEZONE do ambiente ou o campo timezone."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "Timezone opcional (ex.: America/Sao_Paulo ou GMT-3) para interpretar scheduled_for sem offset."
+          },
+          "notify_email_to": {
+            "type": "string",
+            "description": "Email opcional complementar para entrega do resultado (DM no Discord continua obrigatória)."
+          },
+          "recurrence": {
+            "type": "string",
+            "description": "Nova recorrência da tarefa.",
+            "enum": ["none", "daily", "weekly", "monthly"]
+          },
+          "max_attempts": {
+            "type": "integer",
+            "description": "Novo total máximo de tentativas.",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cancel_scheduled_task",
+      "description": "Cancela uma tarefa agendada no SQLite.",
+      "handler": "assistant_connector.tools.scheduled_task_tools:cancel_scheduled_task",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "ID da tarefa agendada."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Motivo opcional do cancelamento."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_application_hardware_status",
+      "description": "Retorna status de execução da aplicação (bot/scheduler), consumo de memória e uptime.",
+      "handler": "assistant_connector.tools.system_tools:get_application_hardware_status",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "list_notion_notes",
       "description": "Lista anotações no Notion em uma janela de dias ao redor de hoje.",
       "handler": "assistant_connector.tools.notion_tools:list_notion_notes",
@@ -637,6 +813,11 @@
         "list_available_agents",
         "list_notion_tasks",
         "create_notion_task",
+        "list_scheduled_tasks",
+        "create_scheduled_task",
+        "edit_scheduled_task",
+        "cancel_scheduled_task",
+        "get_application_hardware_status",
         "list_notion_notes",
         "create_notion_note",
         "register_financial_expense",

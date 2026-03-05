@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import calendar
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import os
+import re
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -9,6 +13,8 @@ from assistant_connector.config_loader import load_assistant_configuration
 from assistant_connector.memory_store import ConversationMemoryStore
 from assistant_connector.runtime import AssistantRuntime
 from assistant_connector.tool_registry import ToolRegistry
+
+SUPPORTED_RECURRENCE_PATTERNS = {"none", "daily", "weekly", "monthly"}
 
 
 class AssistantService:
@@ -49,6 +55,207 @@ class AssistantService:
             guild_id=guild_id,
         )
         self._runtime.reset_session(session_id=session_id)
+
+    def schedule_chat(
+        self,
+        *,
+        user_id: str,
+        channel_id: str,
+        guild_id: str | None,
+        message: str,
+        scheduled_for: str,
+        scheduled_timezone: str = "UTC",
+        notify_email_to: str = "",
+        recurrence_pattern: str = "none",
+        max_attempts: int = 3,
+    ) -> str:
+        return self._runtime._memory_store.create_scheduled_task(
+            user_id=user_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            message=message,
+            scheduled_for=scheduled_for,
+            scheduled_timezone=scheduled_timezone,
+            notify_email_to=notify_email_to,
+            recurrence_pattern=recurrence_pattern,
+            max_attempts=max_attempts,
+        )
+
+    def _log_exception(self, message: str, *args) -> None:
+        logger = getattr(self._runtime, "_project_logger", None)
+        if logger is None:
+            return
+        logger.exception(message, *args)
+
+    def run_scheduled_tasks_once(
+        self,
+        *,
+        now_utc: str | None = None,
+        stale_running_after_seconds: int = 300,
+        retry_base_seconds: int = 30,
+        retry_max_seconds: int = 900,
+    ) -> int:
+        outcome = self.execute_next_scheduled_task(
+            now_utc=now_utc,
+            stale_running_after_seconds=stale_running_after_seconds,
+            retry_base_seconds=retry_base_seconds,
+            retry_max_seconds=retry_max_seconds,
+        )
+        return 1 if outcome["processed"] else 0
+
+    def execute_next_scheduled_task(
+        self,
+        *,
+        now_utc: str | None = None,
+        stale_running_after_seconds: int = 300,
+        retry_base_seconds: int = 30,
+        retry_max_seconds: int = 900,
+    ) -> dict[str, object]:
+        current_time = now_utc or _utc_now_iso()
+        safe_retry_base = max(1, int(retry_base_seconds))
+        safe_retry_max = max(safe_retry_base, int(retry_max_seconds))
+        task = self._runtime._memory_store.claim_next_scheduled_task(
+            now_utc=current_time,
+            stale_running_after_seconds=stale_running_after_seconds,
+        )
+        if task is None:
+            return {"processed": False}
+        task_id = str(task["task_id"])
+        try:
+            response_text = self.chat(
+                user_id=str(task["user_id"]),
+                channel_id=str(task["channel_id"]),
+                guild_id=str(task["guild_id"]) if task["guild_id"] else None,
+                message=str(task["message"]),
+            )
+        except Exception as error:
+            attempt_count = int(task["attempt_count"])
+            max_attempts = int(task["max_attempts"])
+            finished_at = current_time
+            try:
+                if attempt_count >= max_attempts:
+                    self._runtime._memory_store.mark_scheduled_task_failed(
+                        task_id=task_id,
+                        finished_at=finished_at,
+                        error_text=str(error),
+                    )
+                    return {"processed": True, "status": "failed", "task": task}
+                delay_seconds = min(safe_retry_base * (2 ** max(attempt_count - 1, 0)), safe_retry_max)
+                retry_at = _shift_utc_iso(current_time, delay_seconds)
+                self._runtime._memory_store.mark_scheduled_task_retrying(
+                    task_id=task_id,
+                    retry_at=retry_at,
+                    updated_at=finished_at,
+                    error_text=str(error),
+                )
+            except Exception as status_error:
+                self._log_exception(
+                    "Failed to update scheduled task %s status after execution error: %s",
+                    task_id,
+                    status_error,
+                )
+            return {"processed": True, "status": "retrying", "task": task}
+
+        try:
+            self._runtime._memory_store.mark_scheduled_task_succeeded(
+                task_id=task_id,
+                finished_at=current_time,
+                response_text=response_text,
+            )
+            persisted = self._runtime._memory_store.get_scheduled_task(task_id)
+            recurrence_pattern = _normalize_recurrence_pattern(task.get("recurrence_pattern"))
+            if recurrence_pattern != "none":
+                next_scheduled_for = _compute_next_recurring_utc(
+                    base_scheduled_for=str(task["scheduled_for"]),
+                    recurrence_pattern=recurrence_pattern,
+                    timezone_name=str(task.get("scheduled_timezone") or "UTC"),
+                    reference_utc=current_time,
+                )
+                try:
+                    self._runtime._memory_store.reschedule_recurring_task(
+                        task_id=task_id,
+                        next_scheduled_for=next_scheduled_for,
+                        updated_at=current_time,
+                    )
+                    persisted = self._runtime._memory_store.get_scheduled_task(task_id) or persisted
+                except Exception as recurrence_error:
+                    self._log_exception(
+                        "Failed to reschedule recurring task %s: %s",
+                        task_id,
+                        recurrence_error,
+                    )
+            return {
+                "processed": True,
+                "status": "succeeded",
+                "task": persisted or task,
+                "response_text": response_text,
+            }
+        except Exception as status_error:
+            self._log_exception(
+                "Failed to mark scheduled task %s as succeeded: %s",
+                task_id,
+                status_error,
+            )
+            retry_at = _shift_utc_iso(current_time, safe_retry_base)
+            try:
+                self._runtime._memory_store.mark_scheduled_task_retrying(
+                    task_id=task_id,
+                    retry_at=retry_at,
+                    updated_at=current_time,
+                    error_text=f"post_execution_status_update_failed: {status_error}",
+                )
+            except Exception as retry_error:
+                self._log_exception(
+                    "Failed to requeue scheduled task %s after success update error: %s",
+                    task_id,
+                    retry_error,
+                )
+        return {"processed": True, "status": "retrying", "task": task}
+
+    def list_scheduled_tasks(
+        self,
+        *,
+        limit: int = 20,
+        statuses: list[str] | None = None,
+        user_id: str | None = None,
+    ) -> list[dict[str, str]]:
+        return self._runtime._memory_store.list_scheduled_tasks(
+            limit=limit,
+            statuses=statuses,
+            user_id=user_id,
+        )
+
+    def edit_scheduled_task(
+        self,
+        *,
+        task_id: str,
+        message: str | None = None,
+        scheduled_for: str | None = None,
+        scheduled_timezone: str | None = None,
+        notify_email_to: str | None = None,
+        recurrence_pattern: str | None = None,
+        max_attempts: int | None = None,
+    ) -> bool:
+        return self._runtime._memory_store.update_scheduled_task(
+            task_id=task_id,
+            updated_at=_utc_now_iso(),
+            message=message,
+            scheduled_for=scheduled_for,
+            scheduled_timezone=scheduled_timezone,
+            notify_email_to=notify_email_to,
+            recurrence_pattern=recurrence_pattern,
+            max_attempts=max_attempts,
+        )
+
+    def cancel_scheduled_task(self, *, task_id: str, reason: str = "") -> bool:
+        return self._runtime._memory_store.cancel_scheduled_task(
+            task_id=task_id,
+            cancelled_at=_utc_now_iso(),
+            reason=reason,
+        )
+
+    def get_scheduled_task(self, *, task_id: str) -> dict[str, str] | None:
+        return self._runtime._memory_store.get_scheduled_task(task_id)
 
     @staticmethod
     def build_session_id(*, user_id: str, channel_id: str, guild_id: str | None) -> str:
@@ -131,6 +338,21 @@ def _build_agent_summaries(agent_summaries, model_override):
     ]
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _shift_utc_iso(base_timestamp: str, delta_seconds: int) -> str:
+    normalized = str(base_timestamp or "").strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    shifted = parsed.astimezone(timezone.utc) + timedelta(seconds=int(delta_seconds))
+    return shifted.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def _get_env_int(name: str, default: int, *, minimum: int) -> int:
     raw = str(os.getenv(name, "")).strip()
     if not raw:
@@ -140,6 +362,78 @@ def _get_env_int(name: str, default: int, *, minimum: int) -> int:
     except ValueError:
         return default
     return max(parsed, minimum)
+
+
+def _normalize_recurrence_pattern(value: object) -> str:
+    normalized = str(value or "none").strip().lower() or "none"
+    if normalized not in SUPPORTED_RECURRENCE_PATTERNS:
+        return "none"
+    return normalized
+
+
+def _resolve_timezone_for_schedule(timezone_name: str):
+    requested = str(timezone_name or "").strip() or "UTC"
+    gmt_match = re.fullmatch(r"(?:GMT|UTC)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", requested, re.IGNORECASE)
+    if gmt_match:
+        signal = 1 if gmt_match.group(1) == "+" else -1
+        hours = int(gmt_match.group(2))
+        minutes = int(gmt_match.group(3) or 0)
+        if hours > 23 or minutes > 59:
+            raise ValueError("Invalid GMT/UTC offset timezone")
+        offset = signal * timedelta(hours=hours, minutes=minutes)
+        label = f"UTC{gmt_match.group(1)}{hours:02d}:{minutes:02d}"
+        return timezone(offset, name=label)
+    return ZoneInfo(requested)
+
+
+def _add_months_preserving_day(base_datetime: datetime, months_to_add: int) -> datetime:
+    target_index = (base_datetime.month - 1) + int(months_to_add)
+    year = base_datetime.year + target_index // 12
+    month = (target_index % 12) + 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(base_datetime.day, last_day)
+    return base_datetime.replace(year=year, month=month, day=day)
+
+
+def _compute_next_recurring_utc(
+    *,
+    base_scheduled_for: str,
+    recurrence_pattern: str,
+    timezone_name: str,
+    reference_utc: str,
+) -> str:
+    normalized_base = str(base_scheduled_for).strip()
+    normalized_reference = str(reference_utc).strip()
+    if normalized_base.endswith("Z"):
+        normalized_base = f"{normalized_base[:-1]}+00:00"
+    if normalized_reference.endswith("Z"):
+        normalized_reference = f"{normalized_reference[:-1]}+00:00"
+    base_utc = datetime.fromisoformat(normalized_base)
+    reference = datetime.fromisoformat(normalized_reference)
+    if base_utc.tzinfo is None:
+        base_utc = base_utc.replace(tzinfo=timezone.utc)
+    else:
+        base_utc = base_utc.astimezone(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    else:
+        reference = reference.astimezone(timezone.utc)
+    schedule_timezone = _resolve_timezone_for_schedule(timezone_name)
+    candidate = base_utc.astimezone(schedule_timezone)
+    reference_local = reference.astimezone(schedule_timezone)
+
+    attempts = 0
+    while candidate <= reference_local and attempts < 500:
+        if recurrence_pattern == "daily":
+            candidate += timedelta(days=1)
+        elif recurrence_pattern == "weekly":
+            candidate += timedelta(days=7)
+        elif recurrence_pattern == "monthly":
+            candidate = _add_months_preserving_day(candidate, 1)
+        else:
+            raise ValueError("Unsupported recurrence pattern")
+        attempts += 1
+    return candidate.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _load_memories(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):

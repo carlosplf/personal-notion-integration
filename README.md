@@ -70,6 +70,7 @@ NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Catego
 NOTION_API_KEY="secret_x0l..."
 OPENAI_KEY="sk-..."
 LLM_MODEL="gpt-4.1-mini"               # model used across assistant flows (/tasks, /calendar, /add_*, /bot)
+TIMEZONE="America/Sao_Paulo"           # default timezone for scheduled tasks when input has no offset
 EMAIL_FROM="example@gmail.com"
 EMAIL_TO="example@gmail.com"            # optional for /bot; required for legacy automatic email flows
 DISPLAY_NAME="Username"
@@ -109,7 +110,9 @@ python run.py
 
 ## Discord commands (current)
 
-- `/tasks` - Fetch tasks and return a prioritized Markdown summary.
+- `/tasks` - List scheduled assistant tasks stored in SQLite.
+- `/create_task <message> <scheduled_for> [max_attempts] [timezone] [email_to]` - Create a scheduled assistant task (`scheduled_for` can omit offset; uses `TIMEZONE` or explicit `timezone` override such as `America/Sao_Paulo` or `GMT-3`). Delivery is always sent to Discord DM, and optionally also to `email_to`.
+- `/notion_tasks` - Fetch Notion tasks and return a prioritized Markdown summary.
 - `/add_task <text>` - Parse natural language and create a Notion task.
 - `/note` - Open a multiline modal and create a note in Notion Notes.
 - `/notes` - List notes from 5 days back to 5 days ahead.
@@ -126,7 +129,7 @@ python run.py
 - You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
 - In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
 - DM audio attachments are transcribed and processed by the same assistant flow.
-- In conversational mode, the assistant can use tools for Notion tasks/notes, calendar, email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
+- In conversational mode, the assistant can use tools for Notion tasks/notes, calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
 
 ## Run as Ubuntu service (systemd)
 
