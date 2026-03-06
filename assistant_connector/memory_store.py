@@ -112,6 +112,140 @@ class ConversationMemoryStore:
             )
             connection.commit()
 
+    def create_metabolism_record(
+        self,
+        *,
+        user_id: str,
+        bmr: float,
+        tdee: float | None = None,
+        activity_factor: float | None = None,
+        weight_kg: float | None = None,
+        height_cm: float | None = None,
+        age: int | None = None,
+        sex: str | None = None,
+        body_fat_percentage: float | None = None,
+        source: str = "assistant",
+        notes: str = "",
+        measured_at: str | None = None,
+    ) -> dict[str, Any]:
+        clean_user_id = str(user_id or "").strip()
+        if not clean_user_id:
+            raise ValueError("user_id is required")
+
+        safe_bmr = float(bmr)
+        if safe_bmr <= 0:
+            raise ValueError("bmr must be greater than zero")
+
+        safe_tdee = float(tdee) if tdee is not None else None
+        if safe_tdee is not None and safe_tdee <= 0:
+            raise ValueError("tdee must be greater than zero when provided")
+
+        safe_activity_factor = float(activity_factor) if activity_factor is not None else None
+        if safe_activity_factor is not None and safe_activity_factor <= 0:
+            raise ValueError("activity_factor must be greater than zero when provided")
+
+        safe_weight_kg = float(weight_kg) if weight_kg is not None else None
+        if safe_weight_kg is not None and safe_weight_kg <= 0:
+            raise ValueError("weight_kg must be greater than zero when provided")
+
+        safe_height_cm = float(height_cm) if height_cm is not None else None
+        if safe_height_cm is not None and safe_height_cm <= 0:
+            raise ValueError("height_cm must be greater than zero when provided")
+
+        safe_age = int(age) if age is not None else None
+        if safe_age is not None and safe_age <= 0:
+            raise ValueError("age must be greater than zero when provided")
+
+        safe_body_fat_percentage = (
+            float(body_fat_percentage) if body_fat_percentage is not None else None
+        )
+        if safe_body_fat_percentage is not None and not (0 < safe_body_fat_percentage < 100):
+            raise ValueError("body_fat_percentage must be between 0 and 100 when provided")
+
+        safe_source = str(source or "assistant").strip().lower() or "assistant"
+        safe_notes = str(notes or "").strip()
+        safe_sex = str(sex or "").strip().lower() or None
+        safe_measured_at = (
+            self._normalize_utc_iso(measured_at)
+            if measured_at is not None
+            else self._utc_now_iso()
+        )
+        created_at = self._utc_now_iso()
+
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO metabolism_history (
+                    user_id,
+                    measured_at,
+                    source,
+                    bmr,
+                    tdee,
+                    activity_factor,
+                    weight_kg,
+                    height_cm,
+                    age,
+                    sex,
+                    body_fat_percentage,
+                    notes,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_user_id,
+                    safe_measured_at,
+                    self._truncate_text(safe_source, 64),
+                    round(safe_bmr, 2),
+                    round(safe_tdee, 2) if safe_tdee is not None else None,
+                    round(safe_activity_factor, 4) if safe_activity_factor is not None else None,
+                    round(safe_weight_kg, 2) if safe_weight_kg is not None else None,
+                    round(safe_height_cm, 2) if safe_height_cm is not None else None,
+                    safe_age,
+                    self._truncate_text(safe_sex, 32) if safe_sex else None,
+                    (
+                        round(safe_body_fat_percentage, 2)
+                        if safe_body_fat_percentage is not None
+                        else None
+                    ),
+                    self._truncate_text(safe_notes, self._max_message_chars),
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM metabolism_history WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+            connection.commit()
+        return dict(row) if row is not None else {}
+
+    def list_metabolism_history(
+        self,
+        *,
+        user_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        clean_user_id = str(user_id or "").strip()
+        if not clean_user_id:
+            raise ValueError("user_id is required")
+        safe_limit = min(max(int(limit), 1), 100)
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM metabolism_history
+                WHERE user_id = ?
+                ORDER BY measured_at DESC, id DESC
+                LIMIT ?
+                """,
+                (clean_user_id, safe_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_latest_metabolism_record(self, *, user_id: str) -> dict[str, Any] | None:
+        rows = self.list_metabolism_history(user_id=user_id, limit=1)
+        return rows[0] if rows else None
+
     def create_scheduled_task(
         self,
         *,
@@ -824,9 +958,30 @@ class ConversationMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status_next_attempt
                     ON scheduled_tasks (status, next_attempt_at);
+
+                CREATE TABLE IF NOT EXISTS metabolism_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    measured_at TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'assistant',
+                    bmr REAL NOT NULL,
+                    tdee REAL,
+                    activity_factor REAL,
+                    weight_kg REAL,
+                    height_cm REAL,
+                    age INTEGER,
+                    sex TEXT,
+                    body_fat_percentage REAL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_metabolism_history_user_measured_at
+                    ON metabolism_history (user_id, measured_at DESC, id DESC);
                 """
             )
             self._ensure_scheduled_tasks_migrations(connection)
+            self._ensure_metabolism_history_migrations(connection)
             connection.commit()
 
     @staticmethod
@@ -851,6 +1006,69 @@ class ConversationMemoryStore:
             connection.execute(
                 "ALTER TABLE scheduled_tasks ADD COLUMN last_success_at TEXT"
             )
+
+    @staticmethod
+    def _ensure_metabolism_history_migrations(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(metabolism_history)").fetchall()
+        }
+        if not columns:
+            return
+        if "source" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN source TEXT NOT NULL DEFAULT 'assistant'"
+            )
+        if "tdee" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN tdee REAL"
+            )
+        if "activity_factor" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN activity_factor REAL"
+            )
+        if "weight_kg" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN weight_kg REAL"
+            )
+        if "height_cm" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN height_cm REAL"
+            )
+        if "age" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN age INTEGER"
+            )
+        if "sex" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN sex TEXT"
+            )
+        if "body_fat_percentage" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN body_fat_percentage REAL"
+            )
+        if "notes" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+            )
+        if "created_at" not in columns:
+            connection.execute(
+                "ALTER TABLE metabolism_history ADD COLUMN created_at TEXT"
+            )
+        connection.execute(
+            """
+            UPDATE metabolism_history
+            SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE created_at IS NULL OR TRIM(created_at) = ''
+            """
+        )
+        connection.execute(
+            """
+            UPDATE metabolism_history
+            SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', created_at)
+            WHERE created_at GLOB '????-??-?? ??:??:??'
+            """
+        )
 
     @staticmethod
     def _normalize_recurrence_pattern(value: object | None) -> str:

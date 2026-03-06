@@ -97,6 +97,39 @@ def _normalize_meal_category(raw_value):
     raise ValueError(f"refeicao must be one of: {', '.join(_ALLOWED_MEAL_CATEGORIES)}")
 
 
+def _read_optional_boolean(arguments, *keys):
+    for key in keys:
+        if key not in arguments:
+            continue
+        raw_value = arguments.get(key)
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, (int, float)) and raw_value in {0, 1}:
+            return bool(int(raw_value))
+        normalized = str(raw_value or "").strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "sim", "s"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "nao", "não"}:
+            return False
+        raise ValueError(f"{keys[0]} must be a boolean")
+    return None
+
+
+def _resolve_exercise_done_value(exercise, today):
+    done_value = _read_optional_boolean({"done": exercise.get("done")}, "done")
+    if done_value is not None:
+        return done_value
+
+    exercise_date = str(exercise.get("date") or "").strip()
+    try:
+        parsed_date = datetime.date.fromisoformat(exercise_date[:10])
+    except ValueError:
+        return False
+    return parsed_date <= today
+
+
 def list_notion_tasks(arguments, context):
     n_days = max(int(arguments.get("n_days", 0)), 0)
     limit = int(arguments.get("limit", 10))
@@ -319,6 +352,179 @@ def register_notion_meal(arguments, context):
     }
 
 
+def register_notion_exercise(arguments, context):
+    activity = str(arguments.get("atividade", arguments.get("activity", ""))).strip()
+    raw_calories = arguments.get("calorias", arguments.get("calories"))
+    exercise_date = str(arguments.get("data", arguments.get("date", datetime.date.today().isoformat()))).strip()
+    exercise_date_value = datetime.date.fromisoformat(exercise_date)
+    observations = str(arguments.get("observacoes", arguments.get("observations", ""))).strip()
+    done = _read_optional_boolean(arguments, "done", "concluido", "concluído")
+    if done is None:
+        done = exercise_date_value <= datetime.date.today()
+
+    if not activity:
+        raise ValueError("atividade is required")
+    if raw_calories is None:
+        raise ValueError("calorias is required")
+    calories = float(str(raw_calories).replace(",", "."))
+    if calories <= 0:
+        raise ValueError("calorias must be greater than zero")
+
+    created_exercise = notion_connector.create_exercise_in_exercises_db(
+        {
+            "activity": activity,
+            "calories": calories,
+            "date": exercise_date,
+            "observations": observations,
+            "done": done,
+        },
+        project_logger=context.project_logger,
+    )
+    return {
+        "status": "created",
+        "exercise": created_exercise,
+    }
+
+
+def edit_notion_exercise(arguments, context):
+    page_id = str(arguments.get("page_id", "")).strip()
+    if not page_id:
+        raise ValueError("page_id is required")
+
+    kwargs = {}
+    if "atividade" in arguments or "activity" in arguments:
+        activity = str(arguments.get("atividade", arguments.get("activity", ""))).strip()
+        if not activity:
+            raise ValueError("atividade must be a non-empty string when provided")
+        kwargs["activity"] = activity
+    if "calorias" in arguments or "calories" in arguments:
+        raw_calories = arguments.get("calorias", arguments.get("calories"))
+        kwargs["calories"] = float(str(raw_calories).replace(",", "."))
+    if "data" in arguments or "date" in arguments:
+        exercise_date = str(arguments.get("data", arguments.get("date", ""))).strip()
+        datetime.date.fromisoformat(exercise_date)
+        kwargs["date"] = exercise_date
+    if "observacoes" in arguments or "observations" in arguments:
+        kwargs["observations"] = str(arguments.get("observacoes", arguments.get("observations", ""))).strip()
+    done = _read_optional_boolean(arguments, "done", "concluido", "concluído")
+    if done is not None:
+        kwargs["done"] = done
+
+    return notion_connector.update_exercise_in_exercises_db(
+        page_id,
+        project_logger=context.project_logger,
+        **kwargs,
+    )
+
+
+def analyze_notion_exercises(arguments, context):
+    days_back = max(int(arguments.get("days_back", 7)), 0)
+    days_forward = max(int(arguments.get("days_forward", 0)), 0)
+    limit = int(arguments.get("limit", 100))
+    limit = min(max(limit, 1), 300)
+
+    include_meals_arg = arguments.get("include_meals", True)
+    if isinstance(include_meals_arg, str):
+        include_meals = include_meals_arg.strip().lower() not in {"0", "false", "no", "nao", "não"}
+    else:
+        include_meals = bool(include_meals_arg)
+
+    today = datetime.date.today()
+    start_date = today - datetime.timedelta(days=days_back)
+    end_date = today + datetime.timedelta(days=days_forward)
+    start_datetime = f"{start_date.isoformat()}T00:00:00Z"
+    end_datetime = f"{end_date.isoformat()}T23:59:59Z"
+
+    exercises = notion_connector.collect_exercises_from_database(
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        project_logger=context.project_logger,
+    )
+    selected_exercises = exercises[:limit]
+    normalized_exercises = []
+    completed_entries = 0
+    pending_entries = 0
+    pending_future_entries = 0
+
+    total_exercise_calories = 0.0
+    planned_exercise_calories = 0.0
+    for exercise in selected_exercises:
+        normalized_exercise = dict(exercise)
+        is_done = _resolve_exercise_done_value(normalized_exercise, today)
+        normalized_exercise["done"] = is_done
+        normalized_exercises.append(normalized_exercise)
+
+        calories_value = float(normalized_exercise.get("calories") or 0.0)
+        if is_done:
+            completed_entries += 1
+            total_exercise_calories += calories_value
+        else:
+            pending_entries += 1
+            planned_exercise_calories += calories_value
+            exercise_date = str(normalized_exercise.get("date") or "").strip()
+            try:
+                if datetime.date.fromisoformat(exercise_date[:10]) > today:
+                    pending_future_entries += 1
+            except ValueError:
+                continue
+    total_exercise_calories = round(total_exercise_calories, 2)
+    planned_exercise_calories = round(planned_exercise_calories, 2)
+    period_days = (end_date - start_date).days + 1
+    average_exercise_calories_per_day = round(total_exercise_calories / period_days, 2) if period_days > 0 else 0.0
+
+    by_activity = {}
+    for exercise in normalized_exercises:
+        activity = str(exercise.get("activity") or "Não informado").strip() or "Não informado"
+        by_activity.setdefault(activity, {"activity": activity, "entries": 0, "calories": 0.0})
+        by_activity[activity]["entries"] += 1
+        by_activity[activity]["calories"] += float(exercise.get("calories") or 0.0)
+
+    breakdown_by_activity = [
+        {
+            "activity": payload["activity"],
+            "entries": payload["entries"],
+            "calories": round(payload["calories"], 2),
+        }
+        for payload in sorted(by_activity.values(), key=lambda item: item["calories"], reverse=True)
+    ]
+
+    total_meal_calories = None
+    net_calorie_balance = None
+    meal_entries = None
+    if include_meals:
+        meals = notion_connector.collect_meals_from_database(
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            project_logger=context.project_logger,
+        )
+        meal_entries = len(meals)
+        total_meal_calories = round(sum(float(meal.get("calories") or 0.0) for meal in meals), 2)
+        net_calorie_balance = round(total_meal_calories - total_exercise_calories, 2)
+
+    return {
+        "period": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
+        "total_entries": len(exercises),
+        "returned_entries": len(normalized_exercises),
+        "totals": {
+            "total_exercise_calories": total_exercise_calories,
+            "total_planned_calories": planned_exercise_calories,
+            "average_exercise_calories_per_day": average_exercise_calories_per_day,
+            "completed_entries": completed_entries,
+            "pending_entries": pending_entries,
+            "pending_future_entries": pending_future_entries,
+            "total_meal_calories": total_meal_calories,
+            "net_calorie_balance": net_calorie_balance,
+            "meal_entries": meal_entries,
+        },
+        "breakdown_by_activity": breakdown_by_activity,
+        "entries": normalized_exercises,
+        "include_meals": include_meals,
+    }
+
+
 def analyze_notion_meals(arguments, context):
     days_back = max(int(arguments.get("days_back", 7)), 0)
     days_forward = max(int(arguments.get("days_forward", 0)), 0)
@@ -402,15 +608,17 @@ def analyze_notion_meals(arguments, context):
 def _build_meal_insights(meals, meal_breakdown, average_calories_per_day):
     insights = []
     if not meals:
-        return ["Nenhum registro encontrado no período. Registre refeições para receber sugestões."]
+        return [
+            "Nenhum registro encontrado no período. Sem consistência de registro você não melhora: registre todas as refeições a partir de hoje."
+        ]
 
     if average_calories_per_day > 2500:
         insights.append(
-            "Média calórica diária acima de 2500 kcal. Avalie reduzir porções muito calóricas e incluir mais vegetais."
+            "Média calórica diária acima de 2500 kcal: ajuste imediato necessário. Reduza ultraprocessados/doces e aumente vegetais nas próximas refeições."
         )
     elif average_calories_per_day < 1200:
         insights.append(
-            "Média calórica diária abaixo de 1200 kcal. Verifique se o registro está completo e mantenha ingestão equilibrada."
+            "Média calórica diária abaixo de 1200 kcal: isso indica sub-registro ou ingestão insuficiente. Corrija o registro completo e mantenha refeições estruturadas."
         )
 
     dinner_aliases = {"jantar", "dinner", "ceia"}
@@ -421,24 +629,24 @@ def _build_meal_insights(meals, meal_breakdown, average_calories_per_day):
     total_calories = sum(float(meal.get("calories") or 0.0) for meal in meals)
     if dinner_entry and total_calories > 0 and (dinner_entry["calories"] / total_calories) >= 0.45:
         insights.append(
-            "Mais de 45% das calorias estão concentradas no jantar/ceia. Distribuir melhor entre as refeições pode ajudar."
+            "Mais de 45% das calorias estão concentradas no jantar/ceia. Rebalanceie já: antecipe calorias para café da manhã e almoço."
         )
 
     normalized_foods = " ".join(str(meal.get("food") or "").lower() for meal in meals)
     sugary_occurrences = sum(1 for keyword in _SUGGESTION_SUGAR_KEYWORDS if keyword in normalized_foods)
     if sugary_occurrences >= 2:
         insights.append(
-            "Há vários itens açucarados nos registros. Considere reduzir doces e bebidas açucaradas ao longo da semana."
+            "Consumo frequente de itens açucarados detectado. Reduza ativamente doces e bebidas açucaradas nesta semana."
         )
 
     has_vegetables = any(keyword in normalized_foods for keyword in _SUGGESTION_VEGETABLE_KEYWORDS)
     if not has_vegetables:
         insights.append(
-            "Não há indícios de verduras/legumes nas refeições registradas. Tente incluir vegetais em almoço e jantar."
+            "Não há indícios de verduras/legumes nas refeições registradas. Defina regra mínima: incluir vegetais no almoço e no jantar todos os dias."
         )
 
     if not insights:
-        insights.append("Boa consistência nos registros. Continue monitorando porções e variedade nutricional.")
+        insights.append("Boa consistência alimentar. Mantenha disciplina e preserve variedade nutricional diariamente.")
     return insights
 
 

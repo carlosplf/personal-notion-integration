@@ -408,6 +408,127 @@ class TestNotionConnector(unittest.TestCase):
         first_filter = request_payload["filter"]["and"][0]
         self.assertEqual(first_filter["property"], "Data")
 
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_exercise_in_exercises_db_posts_expected_fields(self, mock_load_credentials, mock_post, mock_get):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Atividade": {"type": "title"},
+                    "Data": {"type": "date"},
+                    "Calorias": {"type": "number"},
+                    "Observações": {"type": "rich_text"},
+                    "Done": {"type": "checkbox"},
+                }
+            }
+        )
+        mock_post.return_value = _MockResponse({"id": "exercise-1", "url": "https://notion.so/exercise-1"})
+
+        with patch.dict("os.environ", {"NOTION_EXERCISES_DB_ID": "exercise-db-id"}, clear=False):
+            result = notion_connector.create_exercise_in_exercises_db(
+                {
+                    "activity": "Corrida leve",
+                    "calories": 320,
+                    "date": "2026-04-11",
+                    "observations": "Treino no parque",
+                    "done": False,
+                },
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(result["id"], "exercise-1")
+        self.assertEqual(result["calories"], 320.0)
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["parent"]["database_id"], "exercise-db-id")
+        self.assertEqual(payload["properties"]["Atividade"]["title"][0]["text"]["content"], "Corrida leve")
+        self.assertEqual(payload["properties"]["Data"]["date"]["start"], "2026-04-11")
+        self.assertEqual(payload["properties"]["Calorias"]["number"], 320.0)
+        self.assertFalse(payload["properties"]["Done"]["checkbox"])
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.patch")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_update_exercise_in_exercises_db_updates_selected_fields(
+        self,
+        mock_load_credentials,
+        mock_patch,
+        mock_get,
+    ):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Atividade": {"type": "title"},
+                    "Data": {"type": "date"},
+                    "Calorias": {"type": "number"},
+                    "Observações": {"type": "rich_text"},
+                    "Done": {"type": "checkbox"},
+                }
+            }
+        )
+        mock_patch.return_value = _MockResponse({"id": "exercise-1", "url": "https://notion.so/exercise-1"})
+
+        with patch.dict("os.environ", {"NOTION_EXERCISES_DB_ID": "exercise-db-id"}, clear=False):
+            result = notion_connector.update_exercise_in_exercises_db(
+                "https://www.notion.so/workspace/123456781234123412341234567890ab",
+                activity="Musculação",
+                calories=410,
+                done=True,
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(result["id"], "exercise-1")
+        self.assertEqual(result["updated_fields"], ["activity", "calories", "done"])
+        self.assertIn("12345678-1234-1234-1234-1234567890ab", mock_patch.call_args.args[0])
+        payload = mock_patch.call_args.kwargs["json"]
+        self.assertEqual(payload["properties"]["Atividade"]["title"][0]["text"]["content"], "Musculação")
+        self.assertEqual(payload["properties"]["Calorias"]["number"], 410.0)
+        self.assertTrue(payload["properties"]["Done"]["checkbox"])
+
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_collect_exercises_from_database_parses_expected_fields(self, mock_load_credentials, mock_post):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_post.return_value = _MockResponse(
+            {
+                "results": [
+                    {
+                        "id": "exercise-1",
+                        "url": "https://notion.so/exercise-1",
+                        "created_time": "2026-04-10T20:00:00.000Z",
+                        "properties": {
+                            "Atividade": {"type": "title", "title": [{"plain_text": "Caminhada"}]},
+                            "Data": {"type": "date", "date": {"start": "2026-04-10"}},
+                            "Calorias": {"type": "rich_text", "rich_text": [{"plain_text": "250"}]},
+                            "Observações": {"type": "rich_text", "rich_text": [{"plain_text": "30 min"}]},
+                            "Done": {"type": "checkbox", "checkbox": False},
+                        },
+                    }
+                ],
+                "has_more": False,
+                "next_cursor": None,
+            }
+        )
+
+        with patch.dict("os.environ", {"NOTION_EXERCISES_DB_ID": "exercise-db-id"}, clear=False):
+            exercises = notion_connector.collect_exercises_from_database(
+                start_datetime="2026-04-01T00:00:00Z",
+                end_datetime="2026-04-30T23:59:59Z",
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(len(exercises), 1)
+        self.assertEqual(exercises[0]["activity"], "Caminhada")
+        self.assertEqual(exercises[0]["date"], "2026-04-10")
+        self.assertEqual(exercises[0]["calories"], 250.0)
+        self.assertEqual(exercises[0]["observations"], "30 min")
+        self.assertFalse(exercises[0]["done"])
+        request_payload = mock_post.call_args.kwargs["json"]
+        first_filter = request_payload["filter"]["and"][0]
+        self.assertEqual(first_filter["property"], "Data")
+
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
     def test_collect_monthly_bills_from_database_parses_expected_fields(self, mock_load_credentials, mock_post):

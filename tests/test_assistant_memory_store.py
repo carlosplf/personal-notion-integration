@@ -304,6 +304,74 @@ class TestConversationMemoryStore(unittest.TestCase):
             self.assertIsNotNone(next_claim)
             self.assertEqual(next_claim["task_id"], task_id)
 
+    def test_metabolism_history_records_and_returns_latest(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            memory_store = ConversationMemoryStore(db_path)
+
+            first = memory_store.create_metabolism_record(
+                user_id="user-1",
+                bmr=1700,
+                activity_factor=1.55,
+                tdee=2635,
+                weight_kg=80,
+                height_cm=180,
+                age=33,
+                sex="male",
+                measured_at="2026-03-01T10:00:00Z",
+                source="assistant",
+            )
+            second = memory_store.create_metabolism_record(
+                user_id="user-1",
+                bmr=1680,
+                activity_factor=1.55,
+                tdee=2604,
+                weight_kg=79,
+                height_cm=180,
+                age=33,
+                sex="male",
+                measured_at="2026-03-08T10:00:00Z",
+                source="assistant",
+                notes="After 1 week",
+            )
+
+            history = memory_store.list_metabolism_history(user_id="user-1", limit=10)
+            latest = memory_store.get_latest_metabolism_record(user_id="user-1")
+
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0]["id"], second["id"])
+            self.assertEqual(history[1]["id"], first["id"])
+            self.assertEqual(latest["id"], second["id"])
+            self.assertEqual(latest["notes"], "After 1 week")
+
+    def test_metabolism_migration_normalizes_created_at_format(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE metabolism_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        measured_at TEXT NOT NULL,
+                        bmr REAL NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO metabolism_history (user_id, measured_at, bmr)
+                    VALUES ('user-1', '2026-03-01T10:00:00Z', 1700)
+                    """
+                )
+                connection.commit()
+
+            memory_store = ConversationMemoryStore(db_path)
+            row = memory_store.list_metabolism_history(user_id="user-1", limit=1)[0]
+
+            self.assertIn("T", row["created_at"])
+            self.assertTrue(row["created_at"].endswith("Z"))
+
 
 if __name__ == "__main__":
     unittest.main()

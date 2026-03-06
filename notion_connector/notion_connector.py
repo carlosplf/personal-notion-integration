@@ -463,6 +463,15 @@ def _get_meals_database_id(project_logger):
     raise ValueError(error_message)
 
 
+def _get_exercises_database_id(project_logger):
+    raw_exercises_database_id = str(os.getenv("NOTION_EXERCISES_DB_ID", "")).strip()
+    if raw_exercises_database_id:
+        return _normalize_notion_object_id(raw_exercises_database_id)
+    error_message = "Missing required environment variable: NOTION_EXERCISES_DB_ID"
+    project_logger.error(error_message)
+    raise ValueError(error_message)
+
+
 _MEAL_FOOD_CALORIE_REFERENCES = {
     "arroz branco cozido": {
         "per_100g": 130.0,
@@ -2003,6 +2012,438 @@ def collect_meals_from_database(*, start_datetime, end_datetime, project_logger=
     )
 
 
+def create_exercise_in_exercises_db(exercise_data, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    exercises_database_id = _get_exercises_database_id(project_logger)
+    schema_properties = _fetch_database_schema(exercises_database_id, notion_credentials["api_key"])
+
+    activity = str(exercise_data.get("activity", "")).strip()
+    if not activity:
+        raise ValueError("activity is required")
+
+    raw_calories = exercise_data.get("calories")
+    if raw_calories is None:
+        raise ValueError("calories is required")
+    calories = float(str(raw_calories).replace(",", "."))
+    if calories <= 0:
+        raise ValueError("calories must be greater than zero")
+
+    exercise_date = str(exercise_data.get("date", datetime.date.today().isoformat())).strip()
+    exercise_date_value = datetime.date.fromisoformat(exercise_date)
+    observations = str(exercise_data.get("observations", "")).strip()
+    raw_done = exercise_data.get("done")
+    if raw_done is None:
+        done = exercise_date_value <= datetime.date.today()
+    else:
+        done = _coerce_boolean_value(raw_done, field_name="done")
+
+    activity_property, activity_type = _find_property_name(
+        schema_properties,
+        ("Atividade", "Activity", "Nome", "Name"),
+        {"title", "rich_text"},
+    )
+    date_property, date_type = _find_property_name(
+        schema_properties,
+        ("Data", "Date"),
+        {"date"},
+    )
+    calories_property, calories_type = _find_property_name(
+        schema_properties,
+        ("Calorias", "Calories", "Kcal", "kcal"),
+        {"number", "rich_text"},
+    )
+    observations_property, observations_type = _find_property_name(
+        schema_properties,
+        ("Observações", "Observacoes", "Description"),
+        {"rich_text"},
+    )
+    done_property, done_type = _find_property_name(
+        schema_properties,
+        ("Done", "Concluído", "Concluido", "Finalizado"),
+        {"checkbox"},
+    )
+
+    if not activity_property:
+        raise ValueError("Exercise activity property not found in exercises database")
+    if not date_property:
+        raise ValueError("Exercise date property not found in exercises database")
+    if not calories_property:
+        raise ValueError("Exercise calories property not found in exercises database")
+
+    properties = {}
+    if activity_type == "title":
+        properties[activity_property] = {"title": [{"text": {"content": activity}}]}
+    else:
+        properties[activity_property] = {"rich_text": _build_notion_rich_text_chunks(activity)}
+
+    if date_type == "date":
+        properties[date_property] = {"date": {"start": exercise_date}}
+    if calories_type == "number":
+        properties[calories_property] = {"number": calories}
+    else:
+        properties[calories_property] = {"rich_text": _build_notion_rich_text_chunks(f"{calories:.2f}")}
+    if observations and observations_property and observations_type == "rich_text":
+        properties[observations_property] = {"rich_text": _build_notion_rich_text_chunks(observations)}
+    if done_property and done_type == "checkbox":
+        properties[done_property] = {"checkbox": done}
+
+    request_candidates = [
+        {
+            "notion_version": "2022-06-28",
+            "parent": {"database_id": exercises_database_id},
+        },
+        {
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "parent": {"data_source_id": exercises_database_id},
+        },
+    ]
+    last_error = None
+    for request_candidate in request_candidates:
+        headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+            "Notion-Version": request_candidate["notion_version"],
+            "content-type": "application/json",
+        }
+        response = requests.post(
+            "https://api.notion.com/v1/pages",
+            json={"parent": request_candidate["parent"], "properties": properties},
+            headers=headers,
+            timeout=30,
+        )
+        if response.status_code in (400, 404):
+            response_code = response.json().get("code", "")
+            if response_code in ("validation_error", "object_not_found", "invalid_request"):
+                last_error = response
+                continue
+        response.raise_for_status()
+        payload = response.json()
+        return {
+            "id": payload.get("id"),
+            "page_url": payload.get("url"),
+            "activity": activity,
+            "date": exercise_date,
+            "calories": round(calories, 2),
+            "observations": observations,
+            "done": done,
+        }
+
+    if last_error is not None:
+        last_error.raise_for_status()
+    raise RuntimeError("Failed to create exercise in Notion")
+
+
+def update_exercise_in_exercises_db(
+    page_id,
+    *,
+    activity=None,
+    date=None,
+    calories=None,
+    observations=None,
+    done=None,
+    project_logger=None,
+):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    exercises_database_id = _get_exercises_database_id(project_logger)
+    schema_properties = _fetch_database_schema(exercises_database_id, notion_credentials["api_key"])
+
+    normalized_page_id = _normalize_notion_object_id(page_id)
+    if not normalized_page_id:
+        raise ValueError("page_id is required")
+
+    has_updates = any(value is not None for value in (activity, date, calories, observations, done))
+    if not has_updates:
+        raise ValueError("At least one field is required to update")
+
+    properties = {}
+    updated_fields = []
+
+    if activity is not None:
+        clean_activity = str(activity).strip()
+        if not clean_activity:
+            raise ValueError("activity must be a non-empty string")
+        activity_property, activity_type = _find_property_name(
+            schema_properties,
+            ("Atividade", "Activity", "Nome", "Name"),
+            {"title", "rich_text"},
+        )
+        if not activity_property:
+            raise ValueError("Exercise activity property not found in exercises database")
+        if activity_type == "title":
+            properties[activity_property] = {"title": [{"text": {"content": clean_activity}}]}
+        else:
+            properties[activity_property] = {"rich_text": _build_notion_rich_text_chunks(clean_activity)}
+        updated_fields.append("activity")
+
+    if date is not None:
+        clean_date = str(date).strip()
+        datetime.date.fromisoformat(clean_date)
+        date_property, _ = _find_property_name(
+            schema_properties,
+            ("Data", "Date"),
+            {"date"},
+        )
+        if not date_property:
+            raise ValueError("Exercise date property not found in exercises database")
+        properties[date_property] = {"date": {"start": clean_date}}
+        updated_fields.append("date")
+
+    if calories is not None:
+        clean_calories = float(str(calories).replace(",", "."))
+        if clean_calories <= 0:
+            raise ValueError("calories must be greater than zero")
+        calories_property, calories_type = _find_property_name(
+            schema_properties,
+            ("Calorias", "Calories", "Kcal", "kcal"),
+            {"number", "rich_text"},
+        )
+        if not calories_property:
+            raise ValueError("Exercise calories property not found in exercises database")
+        if calories_type == "number":
+            properties[calories_property] = {"number": clean_calories}
+        else:
+            properties[calories_property] = {"rich_text": _build_notion_rich_text_chunks(f"{clean_calories:.2f}")}
+        updated_fields.append("calories")
+
+    if observations is not None:
+        observations_property, _ = _find_property_name(
+            schema_properties,
+            ("Observações", "Observacoes", "Description"),
+            {"rich_text"},
+        )
+        if not observations_property:
+            raise ValueError("Exercise observations property not found in exercises database")
+        clean_observations = str(observations).strip()
+        properties[observations_property] = {
+            "rich_text": _build_notion_rich_text_chunks(clean_observations),
+        }
+        updated_fields.append("observations")
+
+    if done is not None:
+        done_property, done_type = _find_property_name(
+            schema_properties,
+            ("Done", "Concluído", "Concluido", "Finalizado"),
+            {"checkbox"},
+        )
+        if not done_property or done_type != "checkbox":
+            raise ValueError("Exercise done property not found in exercises database")
+        clean_done = _coerce_boolean_value(done, field_name="done")
+        properties[done_property] = {"checkbox": clean_done}
+        updated_fields.append("done")
+
+    headers = {
+        "accept": "application/json",
+        "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+        "Notion-Version": "2022-06-28",
+        "content-type": "application/json",
+    }
+    response = requests.patch(
+        f"https://api.notion.com/v1/pages/{normalized_page_id}",
+        json={"properties": properties},
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return {
+        "id": payload.get("id"),
+        "page_url": payload.get("url"),
+        "updated_fields": updated_fields,
+    }
+
+
+def collect_exercises_from_database(*, start_datetime, end_datetime, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    exercises_database_id = _get_exercises_database_id(project_logger)
+
+    start_candidate = str(start_datetime or "").strip()
+    end_candidate = str(end_datetime or "").strip()
+    if not start_candidate:
+        raise ValueError("start_datetime is required")
+    if not end_candidate:
+        raise ValueError("end_datetime is required")
+
+    parsed_start = datetime.datetime.fromisoformat(start_candidate.replace("Z", "+00:00"))
+    parsed_end = datetime.datetime.fromisoformat(end_candidate.replace("Z", "+00:00"))
+    start_date = parsed_start.date().isoformat()
+    end_date = parsed_end.date().isoformat()
+
+    query_candidates = [
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{exercises_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "filter_type": "date",
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{exercises_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "date",
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{exercises_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "date",
+            "date_property": "Date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{exercises_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "created_time",
+        },
+    ]
+
+    all_exercises = []
+    selected_candidate = None
+    has_more = True
+    next_cursor = None
+    while has_more:
+        def _build_query_payload(candidate):
+            if candidate.get("filter_type") == "date":
+                payload = {
+                    "filter": {
+                        "and": [
+                            {"property": candidate["date_property"], "date": {"on_or_after": start_date}},
+                            {"property": candidate["date_property"], "date": {"on_or_before": end_date}},
+                        ]
+                    },
+                    "sorts": [{"property": candidate["date_property"], "direction": "ascending"}],
+                    "page_size": 100,
+                }
+            else:
+                payload = {
+                    "filter": {
+                        "and": [
+                            {"timestamp": "created_time", "created_time": {"on_or_after": start_candidate}},
+                            {"timestamp": "created_time", "created_time": {"on_or_before": end_candidate}},
+                        ]
+                    },
+                    "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+                    "page_size": 100,
+                }
+            if next_cursor:
+                payload["start_cursor"] = next_cursor
+            return payload
+
+        if selected_candidate is None:
+            last_error = None
+            for candidate in query_candidates:
+                request_payload = _build_query_payload(candidate)
+                headers = {
+                    "accept": "application/json",
+                    "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                    "Notion-Version": candidate["notion_version"],
+                    "content-type": "application/json",
+                }
+                response = requests.post(candidate["url"], json=request_payload, headers=headers, timeout=30)
+                if response.status_code in (400, 404):
+                    response_code = response.json().get("code", "")
+                    if response_code in ("validation_error", "invalid_request_url", "object_not_found"):
+                        last_error = response
+                        continue
+                response.raise_for_status()
+                selected_candidate = candidate
+                break
+            if selected_candidate is None:
+                last_error.raise_for_status()
+        else:
+            request_payload = _build_query_payload(selected_candidate)
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                "Notion-Version": selected_candidate["notion_version"],
+                "content-type": "application/json",
+            }
+            response = requests.post(
+                selected_candidate["url"],
+                json=request_payload,
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        payload = response.json()
+        for exercise_page in payload.get("results", []):
+            properties = exercise_page.get("properties", {})
+            activity_property = (
+                properties.get("Atividade")
+                or properties.get("Activity")
+                or properties.get("Nome")
+                or properties.get("Name")
+                or {}
+            )
+            activity = _extract_plain_text(activity_property)
+            if not activity:
+                continue
+
+            calories_property = (
+                properties.get("Calorias")
+                or properties.get("Calories")
+                or properties.get("Kcal")
+                or properties.get("kcal")
+                or {}
+            )
+            calories = 0.0
+            if calories_property.get("type") == "number":
+                calories = float(calories_property.get("number") or 0.0)
+            elif calories_property.get("type") == "rich_text":
+                calories_value = _extract_first_float(_extract_plain_text(calories_property))
+                calories = float(calories_value or 0.0)
+
+            exercise_date_payload = (
+                properties.get("Data", {}).get("date")
+                or properties.get("Date", {}).get("date")
+                or {}
+            )
+            exercise_date = str(exercise_date_payload.get("start") or "").strip()
+            if not exercise_date:
+                exercise_date = str(exercise_page.get("created_time") or "")[:10]
+
+            observations_property = (
+                properties.get("Observações")
+                or properties.get("Observacoes")
+                or properties.get("Description")
+                or {}
+            )
+            observations = _extract_plain_text(observations_property)
+            done_property = (
+                properties.get("Done")
+                or properties.get("Concluído")
+                or properties.get("Concluido")
+                or properties.get("Finalizado")
+                or {}
+            )
+            done_value = done_property.get("checkbox") if done_property.get("type") == "checkbox" else None
+
+            all_exercises.append(
+                {
+                    "id": exercise_page.get("id"),
+                    "activity": activity,
+                    "date": exercise_date,
+                    "calories": round(calories, 2),
+                    "observations": observations,
+                    "done": done_value,
+                    "created_time": exercise_page.get("created_time"),
+                    "page_url": exercise_page.get("url"),
+                }
+            )
+
+        has_more = payload.get("has_more", False)
+        next_cursor = payload.get("next_cursor")
+
+    return sorted(
+        all_exercises,
+        key=lambda item: (
+            item.get("date") or "",
+            item.get("created_time") or "",
+        ),
+    )
+
+
 def _extract_plain_text(property_payload):
     payload_type = property_payload.get("type")
     if payload_type == "rich_text":
@@ -2028,6 +2469,22 @@ def _extract_select_name(property_payload):
     if payload_type in {"rich_text", "title"}:
         return _extract_plain_text(property_payload)
     return ""
+
+
+def _coerce_boolean_value(raw_value, *, field_name):
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)) and raw_value in {0, 1}:
+        return bool(int(raw_value))
+
+    normalized = str(raw_value or "").strip().lower()
+    truthy_values = {"1", "true", "t", "yes", "y", "sim", "s"}
+    falsy_values = {"0", "false", "f", "no", "n", "nao", "não"}
+    if normalized in truthy_values:
+        return True
+    if normalized in falsy_values:
+        return False
+    raise ValueError(f"{field_name} must be a boolean")
 
 
 def collect_monthly_bills_from_database(*, start_date, end_date, unpaid_only=False, project_logger=None):

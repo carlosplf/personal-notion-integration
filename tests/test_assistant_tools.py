@@ -8,6 +8,7 @@ from assistant_connector.tools import (
     calendar_tools,
     contacts_tools,
     email_tools,
+    metabolism_tools,
     meta_tools,
     news_tools,
     notion_tools,
@@ -309,6 +310,171 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(result["total_calories"], 1060.0)
         self.assertGreaterEqual(len(result["insights"]), 1)
         self.assertEqual(result["meal_breakdown"][0]["meal_type"], "JANTAR")
+        self.assertTrue(any("regra mínima" in insight for insight in result["insights"]))
+        self.assertTrue(any("itens açucarados" in insight for insight in result["insights"]))
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.create_exercise_in_exercises_db")
+    def test_register_notion_exercise_creates_entry_with_required_fields(self, mock_create_exercise):
+        mock_create_exercise.return_value = {
+            "id": "exercise-1",
+            "activity": "Corrida",
+            "date": "2999-03-10",
+            "calories": 300.0,
+            "observations": "Leve",
+            "done": False,
+        }
+
+        result = notion_tools.register_notion_exercise(
+            {
+                "atividade": "Corrida",
+                "calorias": 300,
+                "data": "2999-03-10",
+                "observacoes": "Leve",
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["status"], "created")
+        self.assertEqual(result["exercise"]["id"], "exercise-1")
+        payload = mock_create_exercise.call_args.args[0]
+        self.assertEqual(payload["activity"], "Corrida")
+        self.assertEqual(payload["calories"], 300.0)
+        self.assertEqual(payload["date"], "2999-03-10")
+        self.assertFalse(payload["done"])
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.update_exercise_in_exercises_db")
+    def test_edit_notion_exercise_updates_payload(self, mock_update_exercise):
+        mock_update_exercise.return_value = {"id": "exercise-1", "updated_fields": ["calories"]}
+
+        result = notion_tools.edit_notion_exercise(
+            {"page_id": "exercise-id", "calorias": 420, "done": True},
+            _build_context(),
+        )
+
+        self.assertEqual(result["id"], "exercise-1")
+        self.assertEqual(mock_update_exercise.call_args.args[0], "exercise-id")
+        self.assertEqual(mock_update_exercise.call_args.kwargs["calories"], 420.0)
+        self.assertTrue(mock_update_exercise.call_args.kwargs["done"])
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_meals_from_database")
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_exercises_from_database")
+    def test_analyze_notion_exercises_correlates_meals(self, mock_collect_exercises, mock_collect_meals):
+        mock_collect_exercises.return_value = [
+            {
+                "id": "exercise-1",
+                "activity": "Corrida",
+                "date": "2026-03-04",
+                "calories": 320.0,
+                "done": True,
+                "created_time": "2026-03-04T07:30:00Z",
+            },
+            {
+                "id": "exercise-2",
+                "activity": "Musculação",
+                "date": "2026-03-05",
+                "calories": 280.0,
+                "done": False,
+                "created_time": "2026-03-05T18:00:00Z",
+            },
+        ]
+        mock_collect_meals.return_value = [
+            {"id": "meal-1", "calories": 700.0},
+            {"id": "meal-2", "calories": 500.0},
+        ]
+
+        result = notion_tools.analyze_notion_exercises({"days_back": 7, "limit": 50}, _build_context())
+
+        self.assertEqual(result["total_entries"], 2)
+        self.assertEqual(result["returned_entries"], 2)
+        self.assertEqual(result["totals"]["total_exercise_calories"], 320.0)
+        self.assertEqual(result["totals"]["total_planned_calories"], 280.0)
+        self.assertEqual(result["totals"]["completed_entries"], 1)
+        self.assertEqual(result["totals"]["pending_entries"], 1)
+        self.assertEqual(result["totals"]["total_meal_calories"], 1200.0)
+        self.assertEqual(result["totals"]["net_calorie_balance"], 880.0)
+        self.assertEqual(result["breakdown_by_activity"][0]["activity"], "Corrida")
+
+    def test_calculate_metabolism_profile_uses_mifflin_st_jeor(self):
+        result = metabolism_tools.calculate_metabolism_profile(
+            {
+                "peso_kg": 80,
+                "altura_cm": 180,
+                "idade": 33,
+                "sexo": "masculino",
+                "nivel_atividade": "moderado",
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["status"], "calculated")
+        self.assertEqual(result["formula"], "mifflin_st_jeor")
+        self.assertGreater(result["bmr"], 0)
+        self.assertGreater(result["tdee"], result["bmr"])
+
+    def test_calculate_metabolism_profile_rejects_invalid_bmr_result(self):
+        with self.assertRaisesRegex(ValueError, "Calculated BMR"):
+            metabolism_tools.calculate_metabolism_profile(
+                {
+                    "peso_kg": 1,
+                    "altura_cm": 1,
+                    "idade": 200,
+                    "sexo": "feminino",
+                    "nivel_atividade": "sedentario",
+                },
+                _build_context(),
+            )
+
+    def test_register_metabolism_profile_and_read_history(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(
+                os.environ,
+                {"ASSISTANT_MEMORY_PATH": db_path},
+                clear=False,
+            ):
+                created = metabolism_tools.register_metabolism_profile(
+                    {
+                        "peso_kg": 82,
+                        "altura_cm": 180,
+                        "idade": 33,
+                        "sexo": "masculino",
+                        "fator_atividade": 1.55,
+                        "notas": "Primeiro registro",
+                    },
+                    context,
+                )
+                history = metabolism_tools.get_metabolism_history({"limit": 5}, context)
+
+        self.assertEqual(created["status"], "created")
+        self.assertEqual(created["calculation"]["formula"], "mifflin_st_jeor")
+        self.assertEqual(history["total"], 1)
+        self.assertIsNotNone(history["latest"])
+        self.assertEqual(history["latest"]["notes"], "Primeiro registro")
+
+    def test_register_metabolism_profile_treats_blank_reference_date_as_now(self):
+        context = _build_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "assistant_memory.sqlite3")
+            with patch.dict(
+                os.environ,
+                {"ASSISTANT_MEMORY_PATH": db_path},
+                clear=False,
+            ):
+                created = metabolism_tools.register_metabolism_profile(
+                    {
+                        "peso_kg": 75,
+                        "altura_cm": 175,
+                        "idade": 30,
+                        "sexo": "masculino",
+                        "fator_atividade": 1.2,
+                        "data_referencia": "   ",
+                    },
+                    context,
+                )
+
+        self.assertEqual(created["status"], "created")
+        self.assertTrue(created["entry"]["measured_at"].endswith("Z"))
 
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_expenses_from_expenses_db")
     def test_analyze_monthly_expenses_returns_totals_breakdown_and_top_expense(self, mock_collect_expenses):
