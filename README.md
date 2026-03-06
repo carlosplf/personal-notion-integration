@@ -132,6 +132,7 @@ python run.py
 - In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
 - DM audio attachments are transcribed and processed by the same assistant flow.
 - In conversational mode, the assistant can use tools for Notion tasks/notes/meals/exercises (`register_notion_meal`, `analyze_notion_meals`, `register_notion_exercise`, `edit_notion_exercise`, `analyze_notion_exercises`) and should use `done=false` to plan future workouts and `done=true` when marking completed activities; it can also use calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
+- For expense analysis, `analyze_monthly_expenses` supports `date` (YYYY-MM-DD) to isolate and detail one specific day (e.g., today).
 
 ## Run as Ubuntu service (systemd)
 

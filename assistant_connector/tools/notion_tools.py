@@ -652,12 +652,32 @@ def _build_meal_insights(meals, meal_breakdown, average_calories_per_day):
 
 def analyze_monthly_expenses(arguments, context):
     month_value = str(arguments.get("month", "")).strip()
+    day_value = str(
+        arguments.get(
+            "date",
+            arguments.get("day", arguments.get("expense_date", "")),
+        )
+    ).strip()
+    limit = int(arguments.get("limit", 50))
+    limit = min(max(limit, 1), 300)
+
+    target_day = None
+    if day_value:
+        try:
+            target_day = datetime.date.fromisoformat(day_value)
+        except ValueError as error:
+            raise ValueError("date must follow YYYY-MM-DD") from error
+
     if month_value:
         if not re.fullmatch(r"\d{4}-\d{2}", month_value):
             raise ValueError("month must follow YYYY-MM")
         target_date = datetime.date.fromisoformat(f"{month_value}-01")
+    elif target_day is not None:
+        target_date = target_day.replace(day=1)
     else:
         target_date = datetime.date.today().replace(day=1)
+    if target_day is not None and target_day.strftime("%Y-%m") != target_date.strftime("%Y-%m"):
+        raise ValueError("date must belong to the requested month")
     month_key = target_date.strftime("%Y-%m")
     month_start, month_end = _month_bounds(target_date)
     expenses = notion_connector.collect_expenses_from_expenses_db(
@@ -665,6 +685,16 @@ def analyze_monthly_expenses(arguments, context):
         end_date=month_end.isoformat(),
         project_logger=context.project_logger,
     )
+
+    selected_expenses = expenses
+    if target_day is not None:
+        target_day_key = target_day.isoformat()
+        selected_expenses = [
+            expense
+            for expense in expenses
+            if str(expense.get("date", "")).strip()[:10] == target_day_key
+        ]
+
     if not expenses:
         return {
             "month": month_key,
@@ -672,16 +702,36 @@ def analyze_monthly_expenses(arguments, context):
             "expenses_count": 0,
             "breakdown_by_category": [],
             "top_expense": None,
+            "daily_breakdown": [],
+            "applied_date_filter": target_day.isoformat() if target_day is not None else None,
+            "selected_total_spent": 0.0,
+            "selected_expenses_count": 0,
+            "selected_top_expense": None,
+            "returned_count": 0,
+            "expenses": [],
         }
 
     total_spent = round(sum(expense["amount"] for expense in expenses), 2)
     by_category = {}
+    by_day = {}
     for expense in expenses:
         category = expense["category"]
         by_category[category] = by_category.get(category, 0.0) + expense["amount"]
+        day_key = str(expense.get("date", "")).strip()[:10]
+        by_day.setdefault(day_key, {"date": day_key, "total": 0.0, "count": 0})
+        by_day[day_key]["total"] += float(expense.get("amount", 0.0))
+        by_day[day_key]["count"] += 1
     breakdown = [
         {"category": category, "total": round(amount, 2)}
         for category, amount in sorted(by_category.items(), key=lambda item: item[1], reverse=True)
+    ]
+    daily_breakdown = [
+        {
+            "date": payload["date"],
+            "total": round(payload["total"], 2),
+            "count": payload["count"],
+        }
+        for payload in sorted(by_day.values(), key=lambda item: item["date"])
     ]
     top_expense = max(expenses, key=lambda expense: expense["amount"]) if expenses else None
     if top_expense:
@@ -692,12 +742,43 @@ def analyze_monthly_expenses(arguments, context):
             "description": top_expense["description"],
         }
 
+    selected_total_spent = round(
+        sum(float(expense.get("amount", 0.0)) for expense in selected_expenses),
+        2,
+    )
+    selected_top_expense = (
+        max(selected_expenses, key=lambda expense: float(expense.get("amount", 0.0)))
+        if selected_expenses else None
+    )
+    if selected_top_expense:
+        selected_top_expense = {
+            "date": selected_top_expense["date"],
+            "amount": round(float(selected_top_expense["amount"]), 2),
+            "category": selected_top_expense["category"],
+            "description": selected_top_expense["description"],
+        }
+    sorted_selected_expenses = sorted(
+        selected_expenses,
+        key=lambda expense: (
+            str(expense.get("date", "")).strip(),
+            -float(expense.get("amount", 0.0)),
+        ),
+    )
+    returned_expenses = sorted_selected_expenses[:limit]
+
     return {
         "month": month_key,
         "total_spent": total_spent,
         "expenses_count": len(expenses),
         "breakdown_by_category": breakdown,
         "top_expense": top_expense,
+        "daily_breakdown": daily_breakdown,
+        "applied_date_filter": target_day.isoformat() if target_day is not None else None,
+        "selected_total_spent": selected_total_spent,
+        "selected_expenses_count": len(selected_expenses),
+        "selected_top_expense": selected_top_expense,
+        "returned_count": len(returned_expenses),
+        "expenses": returned_expenses,
     }
 
 

@@ -502,10 +502,62 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(result["expenses_count"], 2)
         self.assertEqual(result["breakdown_by_category"][0]["category"], "Alimentação")
         self.assertEqual(result["top_expense"]["amount"], 120.0)
+        self.assertEqual(result["selected_expenses_count"], 2)
+        self.assertEqual(result["returned_count"], 2)
+        self.assertEqual(result["expenses"][0]["date"], "2026-03-02")
 
     def test_analyze_monthly_expenses_validates_month_format(self):
         with self.assertRaises(ValueError):
             notion_tools.analyze_monthly_expenses({"month": "03-2026"}, _build_context())
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_expenses_from_expenses_db")
+    def test_analyze_monthly_expenses_supports_day_filter(self, mock_collect_expenses):
+        mock_collect_expenses.return_value = [
+            {
+                "id": "expense-1",
+                "date": "2026-03-06",
+                "amount": 50.00,
+                "category": "Transporte",
+                "description": "Uber ida",
+            },
+            {
+                "id": "expense-2",
+                "date": "2026-03-06",
+                "amount": 180.00,
+                "category": "Alimentação",
+                "description": "Mercado",
+            },
+            {
+                "id": "expense-3",
+                "date": "2026-03-02",
+                "amount": 30.00,
+                "category": "Lazer",
+                "description": "Café",
+            },
+        ]
+
+        result = notion_tools.analyze_monthly_expenses(
+            {"month": "2026-03", "date": "2026-03-06", "limit": 10},
+            _build_context(),
+        )
+
+        self.assertEqual(result["month"], "2026-03")
+        self.assertEqual(result["total_spent"], 260.0)
+        self.assertEqual(result["applied_date_filter"], "2026-03-06")
+        self.assertEqual(result["selected_total_spent"], 230.0)
+        self.assertEqual(result["selected_expenses_count"], 2)
+        self.assertEqual(result["selected_top_expense"]["amount"], 180.0)
+        self.assertEqual(result["returned_count"], 2)
+        self.assertTrue(all(expense["date"] == "2026-03-06" for expense in result["expenses"]))
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_expenses_from_expenses_db")
+    def test_analyze_monthly_expenses_validates_day_filter_format(self, mock_collect_expenses):
+        mock_collect_expenses.return_value = []
+        with self.assertRaises(ValueError):
+            notion_tools.analyze_monthly_expenses(
+                {"month": "2026-03", "date": "06-03-2026"},
+                _build_context(),
+            )
 
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_monthly_bills_from_database")
     def test_list_unpaid_monthly_bills_returns_filtered_data(self, mock_collect_bills):

@@ -38,6 +38,7 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("analyze_email_attachment", agent.tools)
         self.assertIn("orientações incisivas e diretas", agent.system_prompt)
         self.assertIn("done=false para atividades futuras", agent.system_prompt)
+        self.assertIn("parâmetro date", agent.system_prompt)
 
     def test_write_tools_flagged_as_write_operations(self):
         configuration = load_assistant_configuration()
