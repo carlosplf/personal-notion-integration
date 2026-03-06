@@ -234,6 +234,82 @@ class TestAssistantTools(unittest.TestCase):
         payload = mock_create_expense.call_args.args[0]
         self.assertEqual(payload["category"], "Saúde")
 
+    @patch("assistant_connector.tools.notion_tools.notion_connector.create_meal_in_meals_db")
+    def test_register_notion_meal_creates_entry_with_required_fields(self, mock_create_meal):
+        mock_create_meal.return_value = {
+            "id": "meal-1",
+            "food": "Arroz branco",
+            "meal_type": "ALMOÇO",
+            "quantity": "150 g",
+            "date": "2026-03-10",
+            "calories": 195.0,
+            "calorie_estimation_method": "per_100g",
+        }
+
+        result = notion_tools.register_notion_meal(
+            {
+                "alimento": "Arroz branco",
+                "refeicao": "almoço",
+                "quantidade": "150 g",
+                "data": "2026-03-10",
+                "calorias_estimadas": 190,
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["status"], "created")
+        self.assertEqual(result["meal"]["id"], "meal-1")
+        payload = mock_create_meal.call_args.args[0]
+        self.assertEqual(payload["food"], "Arroz branco")
+        self.assertEqual(payload["meal_type"], "ALMOÇO")
+        self.assertEqual(payload["quantity"], "150 g")
+        self.assertEqual(payload["date"], "2026-03-10")
+        self.assertEqual(payload["estimated_calories"], 190)
+
+    def test_register_notion_meal_requires_fields(self):
+        with self.assertRaises(ValueError):
+            notion_tools.register_notion_meal({"refeicao": "ALMOÇO", "quantidade": "100 g"}, _build_context())
+        with self.assertRaises(ValueError):
+            notion_tools.register_notion_meal({"alimento": "Frango", "quantidade": "100 g"}, _build_context())
+        with self.assertRaises(ValueError):
+            notion_tools.register_notion_meal({"alimento": "Frango", "refeicao": "ALMOÇO"}, _build_context())
+        with self.assertRaises(ValueError):
+            notion_tools.register_notion_meal(
+                {"alimento": "Frango", "refeicao": "CEIA", "quantidade": "100 g"},
+                _build_context(),
+            )
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_meals_from_database")
+    def test_analyze_notion_meals_returns_totals_and_insights(self, mock_collect_meals):
+        mock_collect_meals.return_value = [
+            {
+                "id": "meal-1",
+                "food": "Arroz branco",
+                "meal_type": "ALMOÇO",
+                "quantity": "200 g",
+                "date": "2026-03-04",
+                "calories": 260.0,
+                "created_time": "2026-03-04T12:00:00Z",
+            },
+            {
+                "id": "meal-2",
+                "food": "Bolo de chocolate",
+                "meal_type": "JANTAR",
+                "quantity": "1 fatia",
+                "date": "2026-03-04",
+                "calories": 800.0,
+                "created_time": "2026-03-04T20:00:00Z",
+            },
+        ]
+
+        result = notion_tools.analyze_notion_meals({"days_back": 7, "limit": 50}, _build_context())
+
+        self.assertEqual(result["total_entries"], 2)
+        self.assertEqual(result["returned_entries"], 2)
+        self.assertEqual(result["total_calories"], 1060.0)
+        self.assertGreaterEqual(len(result["insights"]), 1)
+        self.assertEqual(result["meal_breakdown"][0]["meal_type"], "JANTAR")
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_expenses_from_expenses_db")
     def test_analyze_monthly_expenses_returns_totals_breakdown_and_top_expense(self, mock_collect_expenses):
         mock_collect_expenses.return_value = [

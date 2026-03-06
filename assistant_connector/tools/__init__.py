@@ -11,6 +11,7 @@ from assistant_connector.tools.meta_tools import list_available_agents, list_ava
 from assistant_connector.tools.news_tools import list_tech_news
 from assistant_connector.tools.notion_tools import (
     analyze_monthly_bills,
+    analyze_notion_meals,
     analyze_monthly_expenses,
     create_notion_note,
     create_notion_task,
@@ -19,6 +20,7 @@ from assistant_connector.tools.notion_tools import (
     mark_monthly_bill_as_paid,
     list_notion_notes,
     list_notion_tasks,
+    register_notion_meal,
     register_financial_expense,
 )
 from assistant_connector.tools.scheduled_task_tools import (
@@ -34,6 +36,8 @@ __all__ = [
     "list_calendar_events",
     "search_contacts",
     "register_financial_expense",
+    "register_notion_meal",
+    "analyze_notion_meals",
     "analyze_monthly_expenses",
     "list_unpaid_monthly_bills",
     "mark_monthly_bill_as_paid",

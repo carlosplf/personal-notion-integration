@@ -25,6 +25,21 @@ _CATEGORY_ALIASES = {
     "lazer": "Lazer",
     "outros": "Outros",
 }
+_SUGGESTION_SUGAR_KEYWORDS = ("refrigerante", "suco", "bolo", "doce", "chocolate", "sorvete")
+_SUGGESTION_VEGETABLE_KEYWORDS = ("salada", "alface", "brocolis", "brócolis", "legume", "verdura")
+_ALLOWED_MEAL_CATEGORIES = ("ALMOÇO", "JANTAR", "LANCHE", "CAFÉ DA MANHÃ")
+_MEAL_CATEGORY_ALIASES = {
+    "almoco": "ALMOÇO",
+    "almoço": "ALMOÇO",
+    "jantar": "JANTAR",
+    "lanche": "LANCHE",
+    "cafe da manha": "CAFÉ DA MANHÃ",
+    "café da manhã": "CAFÉ DA MANHÃ",
+    "cafe da manhã": "CAFÉ DA MANHÃ",
+    "café da manha": "CAFÉ DA MANHÃ",
+    "cafe": "CAFÉ DA MANHÃ",
+    "breakfast": "CAFÉ DA MANHÃ",
+}
 
 
 def _infer_expense_category(description):
@@ -50,6 +65,36 @@ def _month_bounds(target_date):
     else:
         next_month = datetime.date(month_start.year, month_start.month + 1, 1)
     return month_start, (next_month - datetime.timedelta(days=1))
+
+
+def _normalize_meal_category(raw_value):
+    meal_category = str(raw_value or "").strip()
+    if not meal_category:
+        raise ValueError("refeicao is required")
+
+    normalized = meal_category.lower()
+    normalized = (
+        normalized.replace("á", "a")
+        .replace("à", "a")
+        .replace("â", "a")
+        .replace("ã", "a")
+        .replace("é", "e")
+        .replace("ê", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ô", "o")
+        .replace("õ", "o")
+        .replace("ú", "u")
+        .replace("ç", "c")
+    )
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    canonical = _MEAL_CATEGORY_ALIASES.get(normalized)
+    if canonical:
+        return canonical
+
+    if meal_category in _ALLOWED_MEAL_CATEGORIES:
+        return meal_category
+    raise ValueError(f"refeicao must be one of: {', '.join(_ALLOWED_MEAL_CATEGORIES)}")
 
 
 def list_notion_tasks(arguments, context):
@@ -244,6 +289,157 @@ def register_financial_expense(arguments, context):
             "description": description,
         },
     }
+
+
+def register_notion_meal(arguments, context):
+    food = str(arguments.get("alimento", arguments.get("food", ""))).strip()
+    meal_type = _normalize_meal_category(arguments.get("refeicao", arguments.get("meal_type", "")))
+    quantity = str(arguments.get("quantidade", arguments.get("quantity", ""))).strip()
+    meal_date = str(arguments.get("data", arguments.get("date", datetime.date.today().isoformat()))).strip()
+    estimated_calories = arguments.get("calorias_estimadas", arguments.get("estimated_calories"))
+    if not food:
+        raise ValueError("alimento is required")
+    if not quantity:
+        raise ValueError("quantidade is required")
+    datetime.date.fromisoformat(meal_date)
+
+    created_meal = notion_connector.create_meal_in_meals_db(
+        {
+            "food": food,
+            "meal_type": meal_type,
+            "quantity": quantity,
+            "date": meal_date,
+            "estimated_calories": estimated_calories,
+        },
+        project_logger=context.project_logger,
+    )
+    return {
+        "status": "created",
+        "meal": created_meal,
+    }
+
+
+def analyze_notion_meals(arguments, context):
+    days_back = max(int(arguments.get("days_back", 7)), 0)
+    days_forward = max(int(arguments.get("days_forward", 0)), 0)
+    limit = int(arguments.get("limit", 100))
+    limit = min(max(limit, 1), 300)
+
+    today = datetime.date.today()
+    start_date = today - datetime.timedelta(days=days_back)
+    end_date = today + datetime.timedelta(days=days_forward)
+    start_datetime = f"{start_date.isoformat()}T00:00:00Z"
+    end_datetime = f"{end_date.isoformat()}T23:59:59Z"
+
+    meals = notion_connector.collect_meals_from_database(
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        project_logger=context.project_logger,
+    )
+    selected_meals = meals[:limit]
+    total_calories = round(sum(float(meal.get("calories") or 0.0) for meal in selected_meals), 2)
+
+    by_meal_type = {}
+    by_food = {}
+    covered_days = set()
+    for meal in selected_meals:
+        meal_day = str(meal.get("date") or "")[:10]
+        if meal_day:
+            covered_days.add(meal_day)
+        else:
+            created_time = str(meal.get("created_time") or "")
+            if created_time:
+                covered_days.add(created_time[:10])
+        meal_type = str(meal.get("meal_type") or "Não informado")
+        by_meal_type.setdefault(meal_type, {"meal_type": meal_type, "entries": 0, "calories": 0.0})
+        by_meal_type[meal_type]["entries"] += 1
+        by_meal_type[meal_type]["calories"] += float(meal.get("calories") or 0.0)
+
+        food_name = str(meal.get("food") or "").strip()
+        if food_name:
+            key = food_name.lower()
+            by_food.setdefault(key, {"food": food_name, "entries": 0, "calories": 0.0})
+            by_food[key]["entries"] += 1
+            by_food[key]["calories"] += float(meal.get("calories") or 0.0)
+
+    meal_breakdown = [
+        {
+            "meal_type": payload["meal_type"],
+            "entries": payload["entries"],
+            "calories": round(payload["calories"], 2),
+        }
+        for payload in sorted(by_meal_type.values(), key=lambda item: item["calories"], reverse=True)
+    ]
+    top_foods = [
+        {
+            "food": payload["food"],
+            "entries": payload["entries"],
+            "calories": round(payload["calories"], 2),
+        }
+        for payload in sorted(by_food.values(), key=lambda item: item["calories"], reverse=True)[:5]
+    ]
+    days_count = len(covered_days)
+    average_calories_per_day = round(total_calories / days_count, 2) if days_count else 0.0
+    insights = _build_meal_insights(selected_meals, meal_breakdown, average_calories_per_day)
+
+    return {
+        "period": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        },
+        "total_entries": len(meals),
+        "returned_entries": len(selected_meals),
+        "days_with_entries": days_count,
+        "total_calories": total_calories,
+        "average_calories_per_day": average_calories_per_day,
+        "meal_breakdown": meal_breakdown,
+        "top_foods": top_foods,
+        "insights": insights,
+        "meals": selected_meals,
+    }
+
+
+def _build_meal_insights(meals, meal_breakdown, average_calories_per_day):
+    insights = []
+    if not meals:
+        return ["Nenhum registro encontrado no período. Registre refeições para receber sugestões."]
+
+    if average_calories_per_day > 2500:
+        insights.append(
+            "Média calórica diária acima de 2500 kcal. Avalie reduzir porções muito calóricas e incluir mais vegetais."
+        )
+    elif average_calories_per_day < 1200:
+        insights.append(
+            "Média calórica diária abaixo de 1200 kcal. Verifique se o registro está completo e mantenha ingestão equilibrada."
+        )
+
+    dinner_aliases = {"jantar", "dinner", "ceia"}
+    dinner_entry = next(
+        (entry for entry in meal_breakdown if str(entry.get("meal_type", "")).strip().lower() in dinner_aliases),
+        None,
+    )
+    total_calories = sum(float(meal.get("calories") or 0.0) for meal in meals)
+    if dinner_entry and total_calories > 0 and (dinner_entry["calories"] / total_calories) >= 0.45:
+        insights.append(
+            "Mais de 45% das calorias estão concentradas no jantar/ceia. Distribuir melhor entre as refeições pode ajudar."
+        )
+
+    normalized_foods = " ".join(str(meal.get("food") or "").lower() for meal in meals)
+    sugary_occurrences = sum(1 for keyword in _SUGGESTION_SUGAR_KEYWORDS if keyword in normalized_foods)
+    if sugary_occurrences >= 2:
+        insights.append(
+            "Há vários itens açucarados nos registros. Considere reduzir doces e bebidas açucaradas ao longo da semana."
+        )
+
+    has_vegetables = any(keyword in normalized_foods for keyword in _SUGGESTION_VEGETABLE_KEYWORDS)
+    if not has_vegetables:
+        insights.append(
+            "Não há indícios de verduras/legumes nas refeições registradas. Tente incluir vegetais em almoço e jantar."
+        )
+
+    if not insights:
+        insights.append("Boa consistência nos registros. Continue monitorando porções e variedade nutricional.")
+    return insights
 
 
 def analyze_monthly_expenses(arguments, context):

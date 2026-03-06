@@ -454,6 +454,127 @@ def _get_monthly_bills_database_id(project_logger):
     raise ValueError(error_message)
 
 
+def _get_meals_database_id(project_logger):
+    raw_meals_database_id = str(os.getenv("NOTION_MEALS_DB_ID", "")).strip()
+    if raw_meals_database_id:
+        return _normalize_notion_object_id(raw_meals_database_id)
+    error_message = "Missing required environment variable: NOTION_MEALS_DB_ID"
+    project_logger.error(error_message)
+    raise ValueError(error_message)
+
+
+_MEAL_FOOD_CALORIE_REFERENCES = {
+    "arroz branco cozido": {
+        "per_100g": 130.0,
+        "aliases": ("arroz", "arroz branco", "rice"),
+    },
+    "feijao cozido": {
+        "per_100g": 76.0,
+        "aliases": ("feijao", "beans", "black beans"),
+    },
+    "frango grelhado": {
+        "per_100g": 165.0,
+        "aliases": ("frango", "peito de frango", "chicken"),
+    },
+    "carne bovina": {
+        "per_100g": 250.0,
+        "aliases": ("carne", "carne bovina", "bife", "beef"),
+    },
+    "ovo": {
+        "per_100g": 155.0,
+        "per_unit": 78.0,
+        "aliases": ("ovo", "egg"),
+    },
+    "banana": {
+        "per_100g": 89.0,
+        "per_unit": 89.0,
+        "aliases": ("banana",),
+    },
+    "maca": {
+        "per_100g": 52.0,
+        "per_unit": 95.0,
+        "aliases": ("maca", "maça", "apple"),
+    },
+    "pao frances": {
+        "per_100g": 300.0,
+        "per_unit": 140.0,
+        "aliases": ("pao", "pao frances", "bread", "french bread"),
+    },
+    "aveia": {
+        "per_100g": 389.0,
+        "aliases": ("aveia", "oats", "oatmeal"),
+    },
+    "leite integral": {
+        "per_100ml": 61.0,
+        "aliases": ("leite", "leite integral", "milk"),
+    },
+    "iogurte natural": {
+        "per_100g": 63.0,
+        "aliases": ("iogurte", "yogurt", "iogurte natural"),
+    },
+    "queijo muzzarella": {
+        "per_100g": 280.0,
+        "aliases": ("queijo", "mussarela", "muzzarella", "cheese"),
+    },
+    "batata cozida": {
+        "per_100g": 87.0,
+        "aliases": ("batata", "potato"),
+    },
+    "macarrao cozido": {
+        "per_100g": 158.0,
+        "aliases": ("macarrao", "massa", "pasta"),
+    },
+    "salada verde": {
+        "per_100g": 20.0,
+        "aliases": ("salada", "alface", "folhas"),
+    },
+    "whey protein": {
+        "per_unit": 120.0,
+        "aliases": ("whey", "whey protein"),
+    },
+    "bacon": {
+        "per_100g": 541.0,
+        "aliases": ("bacon",),
+    },
+    "cafe sem acucar": {
+        "per_100ml": 2.0,
+        "aliases": ("cafe", "cafe preto", "coffee", "black coffee"),
+    },
+}
+
+
+_MEAL_UNIT_ALIASES = {
+    "g": "g",
+    "grama": "g",
+    "gramas": "g",
+    "gr": "g",
+    "kg": "kg",
+    "quilo": "kg",
+    "quilos": "kg",
+    "ml": "ml",
+    "mililitro": "ml",
+    "mililitros": "ml",
+    "l": "l",
+    "litro": "l",
+    "litros": "l",
+    "un": "unit",
+    "und": "unit",
+    "unidade": "unit",
+    "unidades": "unit",
+    "porcao": "portion",
+    "porcoes": "portion",
+    "porcaoes": "portion",
+    "porcao(s)": "portion",
+    "xicara": "cup",
+    "xicaras": "cup",
+    "colher": "tbsp",
+    "colher de sopa": "tbsp",
+    "colheres de sopa": "tbsp",
+    "colher de cha": "tsp",
+    "colheres de cha": "tsp",
+}
+
+
 def _normalize_notion_object_id(raw_value):
     value = str(raw_value or "").strip()
     if not value:
@@ -475,6 +596,158 @@ def _normalize_notion_object_id(raw_value):
         )
 
     return value
+
+
+def _normalize_text_for_lookup(value):
+    text = str(value or "").strip().lower()
+    replacements = str.maketrans(
+        {
+            "á": "a",
+            "à": "a",
+            "â": "a",
+            "ã": "a",
+            "ä": "a",
+            "é": "e",
+            "è": "e",
+            "ê": "e",
+            "ë": "e",
+            "í": "i",
+            "ì": "i",
+            "î": "i",
+            "ï": "i",
+            "ó": "o",
+            "ò": "o",
+            "ô": "o",
+            "õ": "o",
+            "ö": "o",
+            "ú": "u",
+            "ù": "u",
+            "û": "u",
+            "ü": "u",
+            "ç": "c",
+        }
+    )
+    text = text.translate(replacements)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_first_float(raw_value):
+    match = re.search(r"(-?[0-9]+(?:[.,][0-9]+)?)", str(raw_value or ""))
+    if not match:
+        return None
+    return float(match.group(1).replace(",", "."))
+
+
+def _normalize_quantity_unit(raw_unit):
+    normalized_unit = _normalize_text_for_lookup(raw_unit)
+    if not normalized_unit:
+        return "unit"
+    for alias, normalized in _MEAL_UNIT_ALIASES.items():
+        if normalized_unit == alias or normalized_unit.startswith(f"{alias} "):
+            return normalized
+    return normalized_unit.split(" ")[0]
+
+
+def _parse_quantity_details(quantity):
+    quantity_text = str(quantity or "").strip()
+    if not quantity_text:
+        raise ValueError("quantity is required")
+    amount = _extract_first_float(quantity_text)
+    if amount is None:
+        raise ValueError("quantity must include a numeric value")
+    if amount <= 0:
+        raise ValueError("quantity must be greater than zero")
+    unit_match = re.search(r"[-+]?[0-9]+(?:[.,][0-9]+)?\s*([^\d].*)?$", quantity_text)
+    raw_unit = unit_match.group(1).strip() if unit_match and unit_match.group(1) else ""
+    unit = _normalize_quantity_unit(raw_unit)
+    return {
+        "raw": quantity_text,
+        "amount": amount,
+        "unit": unit,
+    }
+
+
+def _resolve_meal_food_reference(food_name):
+    normalized_food = _normalize_text_for_lookup(food_name)
+    for canonical_name, reference in _MEAL_FOOD_CALORIE_REFERENCES.items():
+        canonical_terms = [_normalize_text_for_lookup(canonical_name)]
+        canonical_terms.extend(_normalize_text_for_lookup(alias) for alias in reference.get("aliases", ()))
+        if any(term and term in normalized_food for term in canonical_terms):
+            return canonical_name, reference
+    return None, None
+
+
+def _estimate_meal_calories(food_name, quantity):
+    clean_food_name = str(food_name or "").strip()
+    if not clean_food_name:
+        raise ValueError("food is required")
+    quantity_details = _parse_quantity_details(quantity)
+    unit = quantity_details["unit"]
+    amount = quantity_details["amount"]
+    canonical_name, reference = _resolve_meal_food_reference(clean_food_name)
+    estimated_calories = None
+    method = ""
+
+    if reference and unit in {"g", "kg"} and reference.get("per_100g") is not None:
+        amount_in_grams = amount * 1000.0 if unit == "kg" else amount
+        estimated_calories = (amount_in_grams / 100.0) * float(reference["per_100g"])
+        method = "per_100g"
+    elif reference and unit in {"ml", "l"} and reference.get("per_100ml") is not None:
+        amount_in_ml = amount * 1000.0 if unit == "l" else amount
+        estimated_calories = (amount_in_ml / 100.0) * float(reference["per_100ml"])
+        method = "per_100ml"
+    elif reference and unit in {"unit", "portion"} and reference.get("per_unit") is not None:
+        estimated_calories = amount * float(reference["per_unit"])
+        method = "per_unit"
+    elif reference and unit == "cup" and reference.get("per_100g") is not None:
+        estimated_calories = ((amount * 240.0) / 100.0) * float(reference["per_100g"])
+        method = "cup_assumed_240g"
+    elif reference and unit == "tbsp" and reference.get("per_100g") is not None:
+        estimated_calories = ((amount * 15.0) / 100.0) * float(reference["per_100g"])
+        method = "tbsp_assumed_15g"
+    elif reference and unit == "tsp" and reference.get("per_100g") is not None:
+        estimated_calories = ((amount * 5.0) / 100.0) * float(reference["per_100g"])
+        method = "tsp_assumed_5g"
+    elif reference and reference.get("per_unit") is not None:
+        estimated_calories = amount * float(reference["per_unit"])
+        method = "fallback_per_unit"
+    elif reference and reference.get("per_100g") is not None:
+        estimated_calories = amount * float(reference["per_100g"])
+        method = "fallback_assumed_100g_portion"
+    else:
+        normalized_food = _normalize_text_for_lookup(clean_food_name)
+        if unit in {"ml", "l"} and any(token in normalized_food for token in ("cafe", "coffee", "cha", "tea")):
+            amount_in_ml = amount * 1000.0 if unit == "l" else amount
+            estimated_calories = (amount_in_ml / 100.0) * 2.0
+            method = "fallback_beverage_no_sugar"
+        elif unit in {"g", "kg", "cup", "tbsp", "tsp"}:
+            amount_in_grams = amount * 1000.0 if unit == "kg" else amount
+            if unit == "cup":
+                amount_in_grams = amount * 240.0
+            elif unit == "tbsp":
+                amount_in_grams = amount * 15.0
+            elif unit == "tsp":
+                amount_in_grams = amount * 5.0
+            estimated_calories = (amount_in_grams / 100.0) * 250.0
+            method = "fallback_generic_solid_no_api"
+        elif unit in {"ml", "l"}:
+            amount_in_ml = amount * 1000.0 if unit == "l" else amount
+            estimated_calories = (amount_in_ml / 100.0) * 45.0
+            method = "fallback_generic_liquid_no_api"
+        else:
+            estimated_calories = amount * 120.0
+            method = "fallback_generic_unit_no_api"
+        canonical_name = canonical_name or "generic_estimation"
+
+    if estimated_calories is None:
+        raise ValueError("Unable to estimate calories with provided quantity")
+    return {
+        "estimated_calories": round(float(estimated_calories), 2),
+        "method": method,
+        "food_reference": canonical_name,
+        "quantity_details": quantity_details,
+    }
 
 
 def _build_create_note_payload(note_data, tags_property_type, observations_property):
@@ -1394,6 +1667,340 @@ def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=No
         next_cursor = payload.get("next_cursor")
 
     return all_expenses
+
+
+def create_meal_in_meals_db(meal_data, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    meals_database_id = _get_meals_database_id(project_logger)
+    schema_properties = _fetch_database_schema(meals_database_id, notion_credentials["api_key"])
+
+    food_name = str(meal_data.get("food", "")).strip()
+    meal_type = str(meal_data.get("meal_type", "")).strip()
+    quantity = str(meal_data.get("quantity", "")).strip()
+    meal_date = str(meal_data.get("date", datetime.date.today().isoformat())).strip()
+    datetime.date.fromisoformat(meal_date)
+    if not food_name:
+        raise ValueError("food is required")
+    if not meal_type:
+        raise ValueError("meal_type is required")
+    if not quantity:
+        raise ValueError("quantity is required")
+
+    estimated_calories_raw = meal_data.get("estimated_calories")
+    if estimated_calories_raw is not None:
+        estimated_calories = float(str(estimated_calories_raw).replace(",", "."))
+        if estimated_calories <= 0:
+            raise ValueError("estimated_calories must be greater than zero")
+        calorie_estimation = {
+            "estimated_calories": round(estimated_calories, 2),
+            "method": "llm_estimate",
+            "food_reference": "llm",
+            "quantity_details": _parse_quantity_details(quantity),
+        }
+    else:
+        calorie_estimation = _estimate_meal_calories(food_name, quantity)
+    estimated_calories = calorie_estimation["estimated_calories"]
+    quantity_details = calorie_estimation["quantity_details"]
+
+    food_property, _ = _find_property_name(schema_properties, ("Alimento", "Food", "Nome", "Name"), {"title"})
+    meal_property, meal_type_property = _find_property_name(
+        schema_properties,
+        ("Refeição", "Refeicao", "Meal", "Tipo de refeicao", "Tipo de refeição"),
+        {"select", "multi_select", "rich_text", "title"},
+    )
+    quantity_property, quantity_type = _find_property_name(
+        schema_properties,
+        ("Quantidade", "Quantity"),
+        {"number", "rich_text", "title"},
+    )
+    calories_property, calories_type = _find_property_name(
+        schema_properties,
+        ("Calorias", "Calories", "Kcal", "kcal"),
+        {"number", "rich_text"},
+    )
+    date_property, date_property_type = _find_property_name(
+        schema_properties,
+        ("Data", "Date"),
+        {"date", "rich_text", "title"},
+    )
+
+    if not food_property:
+        raise ValueError("Meal food property not found in meals database")
+    if not meal_property:
+        raise ValueError("Meal type property not found in meals database")
+    if not quantity_property:
+        raise ValueError("Meal quantity property not found in meals database")
+    if not calories_property:
+        raise ValueError("Meal calories property not found in meals database")
+    if not date_property:
+        raise ValueError("Meal date property not found in meals database")
+
+    properties = {
+        food_property: {"title": [{"text": {"content": food_name}}]},
+    }
+    if meal_type_property == "multi_select":
+        properties[meal_property] = {"multi_select": [{"name": meal_type}]}
+    elif meal_type_property == "select":
+        properties[meal_property] = {"select": {"name": meal_type}}
+    elif meal_type_property == "title":
+        properties[meal_property] = {"title": [{"text": {"content": meal_type}}]}
+    else:
+        properties[meal_property] = {"rich_text": _build_notion_rich_text_chunks(meal_type)}
+
+    if quantity_type == "number":
+        properties[quantity_property] = {"number": float(quantity_details["amount"])}
+    elif quantity_type == "title":
+        properties[quantity_property] = {"title": [{"text": {"content": quantity}}]}
+    else:
+        properties[quantity_property] = {"rich_text": _build_notion_rich_text_chunks(quantity)}
+
+    if calories_type == "number":
+        properties[calories_property] = {"number": float(estimated_calories)}
+    else:
+        properties[calories_property] = {"rich_text": _build_notion_rich_text_chunks(f"{estimated_calories:.2f}")}
+    if date_property_type == "date":
+        properties[date_property] = {"date": {"start": meal_date}}
+    elif date_property_type == "title":
+        properties[date_property] = {"title": [{"text": {"content": meal_date}}]}
+    else:
+        properties[date_property] = {"rich_text": _build_notion_rich_text_chunks(meal_date)}
+
+    request_candidates = [
+        {
+            "notion_version": "2022-06-28",
+            "parent": {"database_id": meals_database_id},
+        },
+        {
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "parent": {"data_source_id": meals_database_id},
+        },
+    ]
+    last_error = None
+    for request_candidate in request_candidates:
+        headers = {
+            "accept": "application/json",
+            "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+            "Notion-Version": request_candidate["notion_version"],
+            "content-type": "application/json",
+        }
+        response = requests.post(
+            "https://api.notion.com/v1/pages",
+            json={"parent": request_candidate["parent"], "properties": properties},
+            headers=headers,
+            timeout=30,
+        )
+        if response.status_code in (400, 404):
+            response_code = response.json().get("code", "")
+            if response_code in ("validation_error", "object_not_found", "invalid_request"):
+                last_error = response
+                continue
+        response.raise_for_status()
+        payload = response.json()
+        return {
+            "id": payload.get("id"),
+            "page_url": payload.get("url"),
+            "food": food_name,
+            "meal_type": meal_type,
+            "quantity": quantity,
+            "date": meal_date,
+            "calories": estimated_calories,
+            "calorie_estimation_method": calorie_estimation["method"],
+            "food_reference": calorie_estimation["food_reference"],
+        }
+
+    if last_error is not None:
+        last_error.raise_for_status()
+    raise RuntimeError("Failed to create meal in Notion")
+
+
+def collect_meals_from_database(*, start_datetime, end_datetime, project_logger=None):
+    project_logger = project_logger or logging.getLogger(__name__)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    meals_database_id = _get_meals_database_id(project_logger)
+
+    start_candidate = str(start_datetime or "").strip()
+    end_candidate = str(end_datetime or "").strip()
+    if not start_candidate:
+        raise ValueError("start_datetime is required")
+    if not end_candidate:
+        raise ValueError("end_datetime is required")
+    parsed_start = datetime.datetime.fromisoformat(start_candidate.replace("Z", "+00:00"))
+    parsed_end = datetime.datetime.fromisoformat(end_candidate.replace("Z", "+00:00"))
+    start_date = parsed_start.date().isoformat()
+    end_date = parsed_end.date().isoformat()
+
+    query_candidates = [
+        {
+            "url": f"https://api.notion.com/v1/data_sources/{meals_database_id}/query",
+            "notion_version": os.getenv("NOTION_VERSION", "2025-09-03"),
+            "filter_type": "date",
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{meals_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "date",
+            "date_property": "Data",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{meals_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "date",
+            "date_property": "Date",
+        },
+        {
+            "url": f"https://api.notion.com/v1/databases/{meals_database_id}/query",
+            "notion_version": "2022-06-28",
+            "filter_type": "created_time",
+        },
+    ]
+
+    all_meals = []
+    selected_candidate = None
+    has_more = True
+    next_cursor = None
+    while has_more:
+        def _build_query_payload(candidate):
+            if candidate.get("filter_type") == "date":
+                payload = {
+                    "filter": {
+                        "and": [
+                            {"property": candidate["date_property"], "date": {"on_or_after": start_date}},
+                            {"property": candidate["date_property"], "date": {"on_or_before": end_date}},
+                        ]
+                    },
+                    "sorts": [{"property": candidate["date_property"], "direction": "ascending"}],
+                    "page_size": 100,
+                }
+            else:
+                payload = {
+                    "filter": {
+                        "and": [
+                            {"timestamp": "created_time", "created_time": {"on_or_after": start_candidate}},
+                            {"timestamp": "created_time", "created_time": {"on_or_before": end_candidate}},
+                        ]
+                    },
+                    "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+                    "page_size": 100,
+                }
+            if next_cursor:
+                payload["start_cursor"] = next_cursor
+            return payload
+
+        if selected_candidate is None:
+            last_error = None
+            for candidate in query_candidates:
+                request_payload = _build_query_payload(candidate)
+                headers = {
+                    "accept": "application/json",
+                    "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                    "Notion-Version": candidate["notion_version"],
+                    "content-type": "application/json",
+                }
+                response = requests.post(candidate["url"], json=request_payload, headers=headers, timeout=30)
+                if response.status_code in (400, 404):
+                    response_code = response.json().get("code", "")
+                    if response_code in ("validation_error", "invalid_request_url", "object_not_found"):
+                        last_error = response
+                        continue
+                response.raise_for_status()
+                selected_candidate = candidate
+                break
+            if selected_candidate is None:
+                last_error.raise_for_status()
+        else:
+            request_payload = _build_query_payload(selected_candidate)
+            headers = {
+                "accept": "application/json",
+                "Authorization": "Bearer " + notion_credentials["api_key"] + "",
+                "Notion-Version": selected_candidate["notion_version"],
+                "content-type": "application/json",
+            }
+            response = requests.post(
+                selected_candidate["url"],
+                json=request_payload,
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        payload = response.json()
+        for meal_page in payload.get("results", []):
+            properties = meal_page.get("properties", {})
+            food_title = (
+                properties.get("Alimento", {}).get("title", [])
+                or properties.get("Food", {}).get("title", [])
+                or properties.get("Nome", {}).get("title", [])
+                or properties.get("Name", {}).get("title", [])
+            )
+            if not food_title:
+                continue
+
+            meal_property = (
+                properties.get("Refeição")
+                or properties.get("Refeicao")
+                or properties.get("Meal")
+                or {}
+            )
+            quantity_property = (
+                properties.get("Quantidade")
+                or properties.get("Quantity")
+                or {}
+            )
+            calories_property = (
+                properties.get("Calorias")
+                or properties.get("Calories")
+                or properties.get("Kcal")
+                or properties.get("kcal")
+                or {}
+            )
+
+            calories = 0.0
+            if calories_property.get("type") == "number":
+                calories = float(calories_property.get("number") or 0.0)
+            elif calories_property.get("type") == "rich_text":
+                parsed = _extract_first_float(_extract_plain_text(calories_property))
+                calories = float(parsed or 0.0)
+
+            quantity_value = ""
+            if quantity_property.get("type") == "number":
+                quantity_value = str(quantity_property.get("number"))
+            elif quantity_property.get("type") in {"rich_text", "title"}:
+                quantity_value = _extract_plain_text(quantity_property)
+
+            meal_date_payload = (
+                properties.get("Data", {}).get("date")
+                or properties.get("Date", {}).get("date")
+                or {}
+            )
+            meal_date = str(meal_date_payload.get("start") or "").strip()
+            if not meal_date:
+                meal_date = str(meal_page.get("created_time") or "")[:10]
+
+            all_meals.append(
+                {
+                    "id": meal_page.get("id"),
+                    "food": food_title[0].get("plain_text") or food_title[0].get("text", {}).get("content"),
+                    "meal_type": _extract_select_name(meal_property) or "Não informado",
+                    "quantity": quantity_value,
+                    "date": meal_date,
+                    "calories": round(calories, 2),
+                    "created_time": meal_page.get("created_time"),
+                    "page_url": meal_page.get("url"),
+                }
+            )
+
+        has_more = payload.get("has_more", False)
+        next_cursor = payload.get("next_cursor")
+
+    return sorted(
+        all_meals,
+        key=lambda item: (
+            item.get("date") or "",
+            item.get("created_time") or "",
+        ),
+    )
 
 
 def _extract_plain_text(property_payload):

@@ -25,7 +25,7 @@ Planned/expanding scope:
 Main modules:
 - `run.py`: app entrypoint
 - `discord_bot.py`: Discord client and slash commands
-- `notion_connector/`: task read/write integration
+- `notion_connector/`: task, notes, expenses, and meals read/write integration
 - `gmail_connector/`: Gmail auth and email sending
 - `calendar_connector/`: Google Calendar read/write integration
 - `openai_connector/`: LLM prompts/parsing/summaries
@@ -67,6 +67,7 @@ Create a `.env` at project root:
 NOTION_DATABASE_ID="8be..."
 NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes (/note and /notes)
 NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Categoria, Descrição, Valor)
+NOTION_MEALS_DB_ID="5ab..."             # Notion meals DB (Alimento, Refeição, Quantidade, Calorias)
 NOTION_API_KEY="secret_x0l..."
 OPENAI_KEY="sk-..."
 LLM_MODEL="gpt-4.1-mini"               # model used across assistant flows (/tasks, /calendar, /add_*, /bot)
@@ -129,7 +130,7 @@ python run.py
 - You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
 - In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
 - DM audio attachments are transcribed and processed by the same assistant flow.
-- In conversational mode, the assistant can use tools for Notion tasks/notes, calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
+- In conversational mode, the assistant can use tools for Notion tasks/notes/meals (`register_notion_meal`, `analyze_notion_meals`), calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
 
 ## Run as Ubuntu service (systemd)
 
