@@ -248,7 +248,15 @@ class AssistantRuntime:
         """Return the resolved per-user memories directory path, or None if not configured."""
         if not self._memories_dir:
             return None
-        user_dir = os.path.join(self._memories_dir, str(user_id))
+        # Sanitize user_id: Telegram user IDs are integers, so only digits are valid
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_\-]", "", str(user_id))
+        if not safe_user_id:
+            return None
+        base = os.path.realpath(self._memories_dir)
+        user_dir = os.path.realpath(os.path.join(base, safe_user_id))
+        # Ensure path stays inside memories_dir (guards against symlink escape)
+        if not user_dir.startswith(base + os.sep) and user_dir != base:
+            return None
         if os.path.isdir(user_dir):
             return user_dir
         # Fallback: use root memories dir if no user-specific subfolder exists yet

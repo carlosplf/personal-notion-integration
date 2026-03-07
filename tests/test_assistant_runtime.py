@@ -1183,5 +1183,67 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(guidance_blocks[0].count("### guided_tool"), 1)
 
 
+class TestResolveUserMemoriesDir(unittest.TestCase):
+    """Security tests for _resolve_user_memories_dir path traversal guards."""
+
+    def _build_minimal_runtime(self, *, memories_dir: str | None, db_path: str):
+        return AssistantRuntime(
+            agent=AgentDefinition(
+                agent_id="personal_assistant",
+                description="assistant",
+                model="gpt-4.1-mini",
+                system_prompt="prompt",
+                tools=[],
+                max_tool_rounds=1,
+                memory_window=10,
+            ),
+            tool_registry=ToolRegistry({}),
+            memory_store=ConversationMemoryStore(db_path),
+            project_logger=_FakeLogger(),
+            available_agents=[],
+            memories_dir=memories_dir,
+            openai_client=_FakeOpenAIClient([]),
+        )
+
+    def test_valid_user_id_resolves_existing_dir(self):
+        with tempfile.TemporaryDirectory() as base:
+            user_dir = os.path.join(base, "12345")
+            os.makedirs(user_dir)
+            rt = self._build_minimal_runtime(memories_dir=base, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("12345")
+            self.assertEqual(result, user_dir)
+
+    def test_path_traversal_user_id_stripped_stays_in_base(self):
+        """'../other' is sanitized to 'other' — path stays inside base; falls back to base if no subdir."""
+        with tempfile.TemporaryDirectory() as base:
+            rt = self._build_minimal_runtime(memories_dir=base, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("../other")
+            # No subdir named "other" exists → falls back to base, which is safe
+            if result is not None:
+                self.assertTrue(os.path.realpath(result).startswith(os.path.realpath(base)))
+
+    def test_user_id_with_slash_stripped_stays_in_base(self):
+        """'foo/bar' is sanitized to 'foobar' — path stays inside base."""
+        with tempfile.TemporaryDirectory() as base:
+            rt = self._build_minimal_runtime(memories_dir=base, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("foo/bar")
+            if result is not None:
+                self.assertTrue(os.path.realpath(result).startswith(os.path.realpath(base)))
+
+    def test_dotdot_path_traversal_stays_in_base(self):
+        """'../../etc/passwd' is sanitized to 'etcpasswd' — path stays inside base."""
+        with tempfile.TemporaryDirectory() as base:
+            rt = self._build_minimal_runtime(memories_dir=base, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("../../etc/passwd")
+            if result is not None:
+                self.assertTrue(os.path.realpath(result).startswith(os.path.realpath(base)))
+
+    def test_no_memories_dir_returns_none(self):
+        with tempfile.TemporaryDirectory() as base:
+            rt = self._build_minimal_runtime(memories_dir=None, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("12345")
+            self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

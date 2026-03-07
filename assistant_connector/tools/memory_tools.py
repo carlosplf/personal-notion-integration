@@ -54,11 +54,27 @@ def list_memory_files(arguments: dict, context: ToolExecutionContext) -> dict:
     return {"files": files, "count": len(files), "memories_dir": memories_dir}
 
 
+def _resolve_safe_path(memories_dir: str, file_name: str) -> str:
+    """Return the absolute path for file_name inside memories_dir.
+
+    Raises ValueError if the resolved path escapes memories_dir or points to a symlink.
+    """
+    base = os.path.realpath(memories_dir)
+    full_path = os.path.join(memories_dir, file_name)
+    # Reject symlinks before resolving
+    if os.path.islink(full_path):
+        raise ValueError("Symlinks are not allowed in the memories directory")
+    real_path = os.path.realpath(full_path)
+    if not real_path.startswith(base + os.sep) and real_path != base:
+        raise ValueError("Path traversal detected")
+    return full_path
+
+
 def read_memory_file(arguments: dict, context: ToolExecutionContext) -> dict:
     """Read the full contents of a memory file for the current user."""
     file_name = _validate_filename(arguments.get("file_name", ""))
     memories_dir = _get_user_memories_dir(context)
-    full_path = os.path.join(memories_dir, file_name)
+    full_path = _resolve_safe_path(memories_dir, file_name)
     if not os.path.isfile(full_path):
         return {"error": "file_not_found", "file_name": file_name, "memories_dir": memories_dir}
     with open(full_path, "r", encoding="utf-8") as f:
@@ -79,17 +95,17 @@ def edit_memory_file(arguments: dict, context: ToolExecutionContext) -> dict:
         raise ValueError("mode must be 'append' or 'replace'")
 
     memories_dir = _get_user_memories_dir(context)
-    os.makedirs(memories_dir, exist_ok=True)
-    full_path = os.path.join(memories_dir, file_name)
+    os.makedirs(memories_dir, exist_ok=True, mode=0o700)
+    full_path = _resolve_safe_path(memories_dir, file_name)
 
     if mode == "replace":
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
         action = "replaced"
     else:
-        existing_size = os.path.getsize(full_path) if os.path.isfile(full_path) else 0
         with open(full_path, "a", encoding="utf-8") as f:
-            if existing_size > 0:
+            current_size = f.seek(0, 2)  # Seek to end — atomic size check
+            if current_size > 0:
                 f.write("\n")
             f.write(content)
         action = "appended"

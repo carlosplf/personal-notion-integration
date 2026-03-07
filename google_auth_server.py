@@ -7,6 +7,7 @@ On successful callback, the token is stored encrypted in UserCredentialStore.
 """
 from __future__ import annotations
 
+import html
 import http.server
 import json
 import logging
@@ -117,7 +118,7 @@ class GoogleOAuthCallbackServer:
                 error_param = (params.get("error") or [""])[0]
 
                 if error_param:
-                    msg = f"Google recusou: {error_param}"
+                    msg = f"Google recusou: {html.escape(error_param)}"
                     self._respond(400, _ERROR_HTML.format(message=msg).encode())
                     return
                 if not code or not state:

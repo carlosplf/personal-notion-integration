@@ -206,6 +206,21 @@ class TestEditMemoryFile(unittest.TestCase):
                 _build_context(memories_dir=None),
             )
 
+    def test_raises_for_symlink_file(self):
+        """Symlinks inside the memories dir must be rejected to prevent arbitrary file access."""
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            target = os.path.join(outside, "secret.md")
+            with open(target, "w") as f:
+                f.write("secret")
+            link = os.path.join(tmp, "symlinked.md")
+            os.symlink(target, link)
+            with self.assertRaises(ValueError):
+                memory_tools.read_memory_file({"file_name": "symlinked.md"}, _build_context(memories_dir=tmp))
+            with self.assertRaises(ValueError):
+                memory_tools.edit_memory_file(
+                    {"file_name": "symlinked.md", "content": "x"}, _build_context(memories_dir=tmp)
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
