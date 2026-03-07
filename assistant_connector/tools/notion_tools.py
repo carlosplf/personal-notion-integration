@@ -139,6 +139,8 @@ def list_notion_tasks(arguments, context):
     tasks = notion_connector.collect_tasks_from_control_panel(
         n_days=n_days,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "total": len(tasks),
@@ -157,6 +159,8 @@ def list_notion_notes(arguments, context):
         days_back=days_back,
         days_forward=days_forward,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "total": len(notes),
@@ -172,7 +176,10 @@ def create_notion_task(arguments, context):
 
     project = str(arguments.get("project", "Pessoal")).strip() or "Pessoal"
     due_date = str(arguments.get("due_date", today_iso_in_configured_timezone())).strip()
-    datetime.date.fromisoformat(due_date)
+    try:
+        datetime.date.fromisoformat(due_date)
+    except ValueError:
+        raise ValueError("due_date must be a valid ISO date (YYYY-MM-DD)")
 
     tags = arguments.get("tags", [])
     if not isinstance(tags, list):
@@ -188,6 +195,8 @@ def create_notion_task(arguments, context):
             "tags": clean_tags,
         },
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
@@ -208,6 +217,8 @@ def create_notion_note(arguments, context):
             "url": url,
         },
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
@@ -245,7 +256,10 @@ def edit_notion_item(arguments, context):
         if "due_date" in arguments:
             due_date = str(arguments.get("due_date", "")).strip()
             if due_date:
-                datetime.date.fromisoformat(due_date)
+                try:
+                    datetime.date.fromisoformat(due_date)
+                except ValueError:
+                    raise ValueError("due_date must be a valid ISO date (YYYY-MM-DD)")
                 payload["due_date"] = due_date
         if "project" in arguments:
             project = str(arguments.get("project", "")).strip()
@@ -282,12 +296,15 @@ def edit_notion_item(arguments, context):
         if "date" in arguments:
             date_value = str(arguments.get("date", "")).strip()
             if date_value:
-                datetime.date.fromisoformat(date_value)
+                try:
+                    datetime.date.fromisoformat(date_value)
+                except ValueError:
+                    raise ValueError("date must be a valid ISO date (YYYY-MM-DD)")
                 payload["date"] = date_value
         if set(payload.keys()) == {"item_type", "page_id"}:
             raise ValueError("At least one card field is required")
 
-    return notion_connector.update_notion_page(payload, project_logger=context.project_logger)
+    return notion_connector.update_notion_page(payload, project_logger=context.project_logger, user_id=context.user_id, credential_store=context.user_credential_store)
 
 
 def register_financial_expense(arguments, context):
@@ -296,12 +313,18 @@ def register_financial_expense(arguments, context):
         raise ValueError("description is required")
 
     raw_amount = str(arguments.get("amount", "")).strip().replace(",", ".")
-    amount = float(raw_amount)
+    try:
+        amount = float(raw_amount)
+    except ValueError:
+        raise ValueError("amount must be a valid number")
     if amount <= 0:
         raise ValueError("amount must be greater than zero")
 
     expense_date_raw = str(arguments.get("expense_date", today_iso_in_configured_timezone())).strip()
-    expense_date = datetime.date.fromisoformat(expense_date_raw)
+    try:
+        expense_date = datetime.date.fromisoformat(expense_date_raw)
+    except ValueError:
+        raise ValueError("expense_date must be a valid ISO date (YYYY-MM-DD)")
     category = _normalize_expense_category(arguments.get("category"), description)
     create_result = notion_connector.create_expense_in_expenses_db(
         {
@@ -312,6 +335,8 @@ def register_financial_expense(arguments, context):
             "amount": amount,
         },
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "status": "created",
@@ -337,7 +362,10 @@ def register_notion_meal(arguments, context):
         raise ValueError("quantidade is required")
     if estimated_calories is None:
         raise ValueError("calorias_estimadas is required")
-    datetime.date.fromisoformat(meal_date)
+    try:
+        datetime.date.fromisoformat(meal_date)
+    except ValueError:
+        raise ValueError("date must be a valid ISO date (YYYY-MM-DD)")
 
     created_meal = notion_connector.create_meal_in_meals_db(
         {
@@ -348,6 +376,8 @@ def register_notion_meal(arguments, context):
             "estimated_calories": estimated_calories,
         },
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "status": "created",
@@ -359,7 +389,10 @@ def register_notion_exercise(arguments, context):
     activity = str(arguments.get("atividade", arguments.get("activity", ""))).strip()
     raw_calories = arguments.get("calorias", arguments.get("calories"))
     exercise_date = str(arguments.get("data", arguments.get("date", today_iso_in_configured_timezone()))).strip()
-    exercise_date_value = datetime.date.fromisoformat(exercise_date)
+    try:
+        exercise_date_value = datetime.date.fromisoformat(exercise_date)
+    except ValueError:
+        raise ValueError("date must be a valid ISO date (YYYY-MM-DD)")
     observations = str(arguments.get("observacoes", arguments.get("observations", ""))).strip()
     done = _read_optional_boolean(arguments, "done", "concluido", "concluído")
     if done is None:
@@ -369,7 +402,10 @@ def register_notion_exercise(arguments, context):
         raise ValueError("atividade is required")
     if raw_calories is None:
         raise ValueError("calorias is required")
-    calories = float(str(raw_calories).replace(",", "."))
+    try:
+        calories = float(str(raw_calories).replace(",", "."))
+    except ValueError:
+        raise ValueError("calorias must be a valid number")
     if calories <= 0:
         raise ValueError("calorias must be greater than zero")
 
@@ -382,6 +418,8 @@ def register_notion_exercise(arguments, context):
             "done": done,
         },
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "status": "created",
@@ -402,10 +440,16 @@ def edit_notion_exercise(arguments, context):
         kwargs["activity"] = activity
     if "calorias" in arguments or "calories" in arguments:
         raw_calories = arguments.get("calorias", arguments.get("calories"))
-        kwargs["calories"] = float(str(raw_calories).replace(",", "."))
+        try:
+            kwargs["calories"] = float(str(raw_calories).replace(",", "."))
+        except ValueError:
+            raise ValueError("calorias must be a valid number")
     if "data" in arguments or "date" in arguments:
         exercise_date = str(arguments.get("data", arguments.get("date", ""))).strip()
-        datetime.date.fromisoformat(exercise_date)
+        try:
+            datetime.date.fromisoformat(exercise_date)
+        except ValueError:
+            raise ValueError("date must be a valid ISO date (YYYY-MM-DD)")
         kwargs["date"] = exercise_date
     if "observacoes" in arguments or "observations" in arguments:
         kwargs["observations"] = str(arguments.get("observacoes", arguments.get("observations", ""))).strip()
@@ -416,6 +460,8 @@ def edit_notion_exercise(arguments, context):
     return notion_connector.update_exercise_in_exercises_db(
         page_id,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
         **kwargs,
     )
 
@@ -442,6 +488,8 @@ def analyze_notion_exercises(arguments, context):
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     selected_exercises = exercises[:limit]
     normalized_exercises = []
@@ -499,6 +547,8 @@ def analyze_notion_exercises(arguments, context):
             start_datetime=start_datetime,
             end_datetime=end_datetime,
             project_logger=context.project_logger,
+            user_id=context.user_id,
+            credential_store=context.user_credential_store,
         )
         meal_entries = len(meals)
         total_meal_calories = round(sum(float(meal.get("calories") or 0.0) for meal in meals), 2)
@@ -544,6 +594,8 @@ def analyze_notion_meals(arguments, context):
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     selected_meals = meals[:limit]
     total_calories = round(sum(float(meal.get("calories") or 0.0) for meal in selected_meals), 2)
@@ -687,6 +739,8 @@ def analyze_monthly_expenses(arguments, context):
         start_date=month_start.isoformat(),
         end_date=month_end.isoformat(),
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
     selected_expenses = expenses
@@ -802,6 +856,8 @@ def list_unpaid_monthly_bills(arguments, context):
         end_date=month_end.isoformat(),
         unpaid_only=True,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "month": target_date.strftime("%Y-%m"),
@@ -833,6 +889,8 @@ def mark_monthly_bill_as_paid(arguments, context):
         paid_amount=normalized_paid_amount,
         payment_date=payment_date,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "status": "updated",
@@ -858,6 +916,8 @@ def analyze_monthly_bills(arguments, context):
         end_date=month_end.isoformat(),
         unpaid_only=False,
         project_logger=context.project_logger,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     if not bills:
         return {

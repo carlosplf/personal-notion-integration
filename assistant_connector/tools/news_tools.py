@@ -36,7 +36,10 @@ SOURCE_REGISTRY = {
 
 
 def list_tech_news(arguments, _context):
-    limit = int(arguments.get("limit", 8))
+    try:
+        limit = int(arguments.get("limit", 8))
+    except (ValueError, TypeError):
+        raise ValueError("limit must be a valid integer")
     limit = min(max(limit, 1), 20)
     config = _load_sources_config()
     defaults = config.get("defaults", {})
@@ -149,7 +152,10 @@ def _build_cutoff(date_filter: dict[str, object], fallback: datetime | None = No
         raise ValueError("Missing date_filter configuration.")
     mode = str(date_filter.get("mode", "")).strip().lower()
     if mode == "recent":
-        lookback_days = int(date_filter.get("lookback_days", 0))
+        try:
+            lookback_days = int(date_filter.get("lookback_days", 0))
+        except (ValueError, TypeError):
+            raise ValueError("date_filter.lookback_days must be a valid integer.")
         if lookback_days <= 0:
             raise ValueError("date_filter.lookback_days must be a positive integer.")
         return reference_now_utc - timedelta(days=lookback_days)
@@ -176,7 +182,10 @@ def _build_requested_cutoff(arguments):
     max_age_hours = arguments.get("max_age_hours")
     if max_age_hours is None:
         return None
-    max_age_hours = int(max_age_hours)
+    try:
+        max_age_hours = int(max_age_hours)
+    except (ValueError, TypeError):
+        raise ValueError("max_age_hours must be a valid integer")
     max_age_hours = min(max(max_age_hours, 6), 168)
     return datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 

@@ -978,6 +978,15 @@ class ConversationMemoryStore:
 
                 CREATE INDEX IF NOT EXISTS idx_metabolism_history_user_measured_at
                     ON metabolism_history (user_id, measured_at DESC, id DESC);
+
+                CREATE TABLE IF NOT EXISTS user_credentials (
+                    telegram_user_id TEXT NOT NULL,
+                    credential_key   TEXT NOT NULL,
+                    credential_value TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    PRIMARY KEY (telegram_user_id, credential_key)
+                );
                 """
             )
             self._ensure_scheduled_tasks_migrations(connection)

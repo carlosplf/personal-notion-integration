@@ -39,3 +39,4 @@ class ToolExecutionContext:
     agent: AgentDefinition
     available_tools: list[dict[str, Any]]
     available_agents: list[dict[str, Any]]
+    user_credential_store: Any = None  # UserCredentialStore | None

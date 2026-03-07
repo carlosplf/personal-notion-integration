@@ -59,7 +59,7 @@ def _normalize_scheduled_time(raw_value: str, timezone_hint: str | None) -> tupl
 def _can_manage_task_owner(*, task_user_id: str, context_user_id: str) -> bool:
     if str(task_user_id) == str(context_user_id):
         return True
-    authorized_user_id = str(os.getenv("DISCORD_ALLOWED_USER_ID", "")).strip()
+    authorized_user_id = str(os.getenv("TELEGRAM_ALLOWED_USER_ID", "")).strip()
     if authorized_user_id and str(context_user_id) == authorized_user_id:
         return True
     if not str(task_user_id).strip() and authorized_user_id and str(context_user_id) == authorized_user_id:
@@ -93,10 +93,7 @@ def create_scheduled_task(arguments, context):
 
     user_id = _coalesce_identifier(arguments.get("user_id"), context.user_id)
     channel_id = _coalesce_identifier(arguments.get("channel_id"), context.channel_id)
-    raw_guild_id = arguments.get("guild_id")
-    guild_id = _coalesce_identifier(raw_guild_id, context.guild_id) if raw_guild_id is not None else (
-        str(context.guild_id) if context.guild_id is not None else None
-    )
+    guild_id = context.guild_id
     max_attempts = max(1, int(arguments.get("max_attempts", 3)))
     notify_email_to = str(arguments.get("notify_email_to", "")).strip()
     recurrence_pattern = _normalize_recurrence_pattern(arguments.get("recurrence"))

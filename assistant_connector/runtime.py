@@ -35,6 +35,7 @@ class AssistantRuntime:
         user_memories: dict[str, str] | None = None,
         max_user_memory_chars: int = 3000,
         openai_client=None,
+        user_credential_store=None,
     ):
         self._agent = agent
         self._tool_registry = tool_registry
@@ -51,6 +52,7 @@ class AssistantRuntime:
         }
         self._max_user_memory_chars = max(500, int(max_user_memory_chars))
         self._openai_client = openai_client or self._create_openai_client()
+        self._user_credential_store = user_credential_store
 
     def process_user_message(
         self,
@@ -82,6 +84,7 @@ class AssistantRuntime:
             agent=self._agent,
             available_tools=available_tools,
             available_agents=self._available_agents,
+            user_credential_store=self._user_credential_store,
         )
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(
@@ -156,10 +159,12 @@ class AssistantRuntime:
         system_message = (
             f"{self._agent.system_prompt}\n\n"
             "Se o usuário perguntar quais tools existem, use list_available_tools para listar nomes e finalidade.\n\n"
-            "Formato obrigatório para resposta no Discord:\n"
+            "Formato obrigatório para resposta no Telegram:\n"
             "- Sempre responda em Markdown.\n"
-            "- Use título H2 no início (## ...).\n"
-            "- Use listas para itens múltiplos e destaque com negrito quando útil.\n"
+            "- Use título H2 no início (## ...) com emoji contextual (ex.: ## 📋 Tarefas, ## 📅 Agenda).\n"
+            "- Use emojis para enriquecer visualmente: ✅ concluído, ⚠️ atenção, 🔴 urgente, 🟡 médio, 🟢 baixo, 📅 data, 💡 dica, 🎯 foco.\n"
+            "- Use listas para itens múltiplos e negrito (**) para destacar o que é mais importante.\n"
+            "- Use blockquote (> texto) para destacar observações ou alertas importantes.\n"
             "- Mire em respostas com até 1500 caracteres e, sempre que possível, não ultrapasse 1800.\n"
             "- Nunca responda em JSON bruto.\n\n"
             f"{self._build_email_style_guidance()}\n\n"

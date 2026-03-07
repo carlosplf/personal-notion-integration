@@ -1,5 +1,5 @@
-from discord_bot import run_discord_bot
+from telegram_bot import run_telegram_bot
 
 
 if __name__ == "__main__":
-    run_discord_bot()
+    run_telegram_bot()

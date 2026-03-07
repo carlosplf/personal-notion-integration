@@ -4,7 +4,7 @@ import json
 import base64
 from email import message_from_bytes
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from gmail_connector import gmail_connector
 
@@ -15,6 +15,38 @@ class _MockLogger:
 
     def warning(self, *_args, **_kwargs):
         return None
+
+    def debug(self, *_args, **_kwargs):
+        return None
+
+    def info(self, *_args, **_kwargs):
+        return None
+
+
+_FAKE_TOKEN_JSON = json.dumps({
+    "token": "fake-access-token",
+    "refresh_token": "fake-refresh-token",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_id": "fake-client-id",
+    "client_secret": "fake-client-secret",
+    "scopes": ["https://mail.google.com/"],
+})
+
+
+def _mock_creds():
+    """Return a MagicMock that satisfies the gmail_connect() credential checks."""
+    creds = MagicMock()
+    creds.valid = True
+    creds.expired = False
+    creds.refresh_token = None
+    return creds
+
+
+def _mock_credential_store():
+    """Return a credential store mock that provides a valid Google token."""
+    store = MagicMock()
+    store.get_credential.return_value = _FAKE_TOKEN_JSON
+    return store
 
 
 class _FakeSendExecute:
@@ -111,13 +143,13 @@ class TestGmailConnector(unittest.TestCase):
         self.assertIn("raw", result)
 
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_send_custom_email_sends_message(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
     ):
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailService()
 
         with patch.dict(os.environ, {"EMAIL_FROM": "from@example.com"}, clear=False):
@@ -126,6 +158,8 @@ class TestGmailConnector(unittest.TestCase):
                 subject="Assunto",
                 body_text="Conteúdo",
                 email_to="x@example.com",
+                user_id="test-user",
+                credential_store=_mock_credential_store(),
             )
 
         self.assertEqual(result["id"], "gmail-msg-1")
@@ -133,13 +167,13 @@ class TestGmailConnector(unittest.TestCase):
         self.assertEqual(result["to"], "x@example.com")
 
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_send_custom_email_replies_in_same_thread(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
     ):
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         service = unittest.mock.Mock()
         users = service.users.return_value
         messages = users.messages.return_value
@@ -165,6 +199,8 @@ class TestGmailConnector(unittest.TestCase):
                 body_text="Conteúdo",
                 email_to="x@example.com",
                 reply_to_message_id="orig-msg-id",
+                user_id="test-user",
+                credential_store=_mock_credential_store(),
             )
 
         self.assertEqual(result["thread_id"], "thread-original")
@@ -213,10 +249,10 @@ class TestGmailConnector(unittest.TestCase):
             self.assertEqual(saved["refresh_token"], "abc")
 
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_search_emails_returns_normalized_metadata(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
     ):
         payloads = {
@@ -234,13 +270,15 @@ class TestGmailConnector(unittest.TestCase):
                 },
             }
         }
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailServiceWithReads(payloads)
 
         result = gmail_connector.search_emails(
             project_logger=_MockLogger(),
             query="from:a@example.com",
             max_results=5,
+            user_id="test-user",
+            credential_store=_mock_credential_store(),
         )
 
         self.assertEqual(result["returned"], 1)
@@ -248,10 +286,10 @@ class TestGmailConnector(unittest.TestCase):
         self.assertEqual(result["emails"][0]["subject"], "Assunto")
 
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_read_email_includes_attachments(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
     ):
         payloads = {
@@ -273,13 +311,15 @@ class TestGmailConnector(unittest.TestCase):
                 },
             }
         }
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailServiceWithReads(payloads)
 
         result = gmail_connector.read_email(
             project_logger=_MockLogger(),
             message_id="m2",
             include_body=False,
+            user_id="test-user",
+            credential_store=_mock_credential_store(),
         )
 
         self.assertEqual(result["id"], "m2")
@@ -287,10 +327,10 @@ class TestGmailConnector(unittest.TestCase):
         self.assertEqual(result["attachments"][0]["attachment_id"], "att-1")
 
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_search_email_attachments_filters_filename(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
     ):
         payloads = {
@@ -315,7 +355,7 @@ class TestGmailConnector(unittest.TestCase):
                 },
             }
         }
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailServiceWithReads(payloads)
 
         result = gmail_connector.search_email_attachments(
@@ -323,6 +363,8 @@ class TestGmailConnector(unittest.TestCase):
             query="subject:Docs",
             filename_contains=".xlsx",
             max_results=10,
+            user_id="test-user",
+            credential_store=_mock_credential_store(),
         )
 
         self.assertEqual(result["returned"], 1)
@@ -330,10 +372,10 @@ class TestGmailConnector(unittest.TestCase):
 
     @patch("gmail_connector.gmail_connector._extract_attachment_text")
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_analyze_email_attachment_downloads_and_extracts(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
         mock_extract_attachment_text,
     ):
@@ -353,7 +395,7 @@ class TestGmailConnector(unittest.TestCase):
             }
         }
         encoded_payload = base64.urlsafe_b64encode(b"fake-pdf").decode()
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailServiceWithReads(
             payloads,
             {"att-44": {"data": encoded_payload}},
@@ -365,6 +407,8 @@ class TestGmailConnector(unittest.TestCase):
             message_id="m4",
             attachment_id="att-44",
             max_chars=1000,
+            user_id="test-user",
+            credential_store=_mock_credential_store(),
         )
 
         self.assertEqual(result["attachment_id"], "att-44")
@@ -385,10 +429,10 @@ class TestGmailConnector(unittest.TestCase):
 
     @patch("gmail_connector.gmail_connector._extract_attachment_text")
     @patch("gmail_connector.gmail_connector.build")
-    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_file")
+    @patch("gmail_connector.gmail_connector.Credentials.from_authorized_user_info")
     def test_analyze_email_attachment_reads_inline_attachment_data(
         self,
-        mock_from_authorized_user_file,
+        mock_from_authorized_user_info,
         mock_build,
         mock_extract_attachment_text,
     ):
@@ -408,7 +452,7 @@ class TestGmailConnector(unittest.TestCase):
                 },
             }
         }
-        mock_from_authorized_user_file.return_value = object()
+        mock_from_authorized_user_info.return_value = _mock_creds()
         mock_build.return_value = _FakeGmailServiceWithReads(payloads, {})
         mock_extract_attachment_text.return_value = "resumo inline"
 
@@ -417,6 +461,8 @@ class TestGmailConnector(unittest.TestCase):
             message_id="m5",
             filename="plano",
             max_chars=1000,
+            user_id="test-user",
+            credential_store=_mock_credential_store(),
         )
 
         self.assertEqual(result["filename"], "Plano Analise.docx")

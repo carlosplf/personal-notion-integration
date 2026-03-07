@@ -262,6 +262,7 @@ def create_assistant_service(
     memory_path: str | None = None,
     agent_id: str | None = None,
     openai_client=None,
+    user_credential_store=None,
 ) -> AssistantService:
     load_dotenv()
     configuration = load_assistant_configuration(config_path=config_path)
@@ -315,6 +316,7 @@ def create_assistant_service(
         user_memories=user_memories,
         max_user_memory_chars=max_user_memory_chars,
         openai_client=openai_client,
+        user_credential_store=user_credential_store,
     )
     return AssistantService(runtime=runtime)
 

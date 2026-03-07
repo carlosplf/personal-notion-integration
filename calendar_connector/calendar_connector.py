@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from utils.timezone_utils import get_configured_timezone, now_in_configured_timezone, today_in_configured_timezone
@@ -19,27 +18,50 @@ SCOPES = [
 ]
 
 
-def calendar_connect(project_logger):
+def calendar_connect(project_logger, user_id=None, credential_store=None):
     """
-    Create a Google Calendar connection using local OAuth credentials.
-    This method expects a 'credentials.json' file and stores token in token.json.
+    Create a Google Calendar service object.
+
+    Credential resolution order:
+    1. Per-user token stored in credential_store (if user_id + store provided)
+    2. System-level token.json file
+    3. ValueError — interactive browser flow is NOT supported (headless server)
     """
     creds = None
+    _from_store = False
 
-    project_logger.debug("Connecting Google Calendar Oauth2...")
+    project_logger.debug("Connecting Google Calendar OAuth2...")
 
-    if os.path.exists("token.json"):
+    if credential_store is not None and user_id is not None:
+        raw = credential_store.get_credential(str(user_id), "google_token_json", use_env_fallback=False)
+        if raw:
+            try:
+                creds = Credentials.from_authorized_user_info(json.loads(raw), SCOPES)
+                _from_store = True
+            except Exception:
+                project_logger.warning("Failed to parse stored Google token for user %s", user_id)
+                creds = None
+
+    if creds is None and os.path.exists("token.json"):
         creds = _load_credentials_from_token("token.json", SCOPES, project_logger)
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
+    if not creds:
+        raise ValueError(
+            "Google não autorizado. Use /google_auth para autorizar sua conta Google."
+        )
 
-        with open("token.json", "w", encoding="utf-8") as token:
-            token.write(creds.to_json())
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            if _from_store and credential_store is not None and user_id is not None:
+                credential_store.set_credential(str(user_id), "google_token_json", creds.to_json())
+            else:
+                with open("token.json", "w", encoding="utf-8") as token:
+                    token.write(creds.to_json())
+        else:
+            raise ValueError(
+                "Token do Google inválido ou expirado. Use /google_auth para reautorizar."
+            )
 
     return build("calendar", "v3", credentials=creds)
 
@@ -68,8 +90,8 @@ def _to_utc_rfc3339(value):
     return value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def list_upcoming_events(project_logger, max_results=10):
-    service = calendar_connect(project_logger=project_logger)
+def list_upcoming_events(project_logger, max_results=10, user_id=None, credential_store=None):
+    service = calendar_connect(project_logger=project_logger, user_id=user_id, credential_store=credential_store)
     now = _to_utc_rfc3339(now_in_configured_timezone())
 
     response = service.events().list(
@@ -94,8 +116,8 @@ def list_upcoming_events(project_logger, max_results=10):
     return events
 
 
-def list_week_events(project_logger, max_results=100):
-    service = calendar_connect(project_logger=project_logger)
+def list_week_events(project_logger, max_results=100, user_id=None, credential_store=None):
+    service = calendar_connect(project_logger=project_logger, user_id=user_id, credential_store=credential_store)
     now = now_in_configured_timezone()
     week_end = now + datetime.timedelta(days=7)
 
@@ -125,8 +147,8 @@ def list_week_events(project_logger, max_results=100):
     return events
 
 
-def list_current_week_events(project_logger, max_results=100):
-    service = calendar_connect(project_logger=project_logger)
+def list_current_week_events(project_logger, max_results=100, user_id=None, credential_store=None):
+    service = calendar_connect(project_logger=project_logger, user_id=user_id, credential_store=credential_store)
     today = today_in_configured_timezone()
     days_since_sunday = (today.weekday() + 1) % 7
     week_start_date = today - datetime.timedelta(days=days_since_sunday)
@@ -170,8 +192,10 @@ def create_calendar_event(
     end_datetime,
     description=None,
     timezone="UTC",
+    user_id=None,
+    credential_store=None,
 ):
-    service = calendar_connect(project_logger=project_logger)
+    service = calendar_connect(project_logger=project_logger, user_id=user_id, credential_store=credential_store)
     start_rfc3339, start_dt = _normalize_event_datetime(start_datetime, timezone)
     end_rfc3339, end_dt = _normalize_event_datetime(end_datetime, timezone)
     if end_dt <= start_dt:

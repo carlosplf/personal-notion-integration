@@ -12,13 +12,14 @@ from utils.timezone_utils import (
 )
 
 
-def collect_tasks_from_control_panel(n_days=0, project_logger=None):
+def collect_tasks_from_control_panel(n_days=0, project_logger=None, user_id=None, credential_store=None):
     """
     Connect to Notion API and collect Tasks from 'Control Panel' database.
-    TODO: Fix project_logger argument. Can't be None.
     """
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_database_id.")
     today = today_in_configured_timezone()
     cutoff_day = today + datetime.timedelta(days=max(n_days, 0) + 1)
     cutoff_datetime = datetime.datetime.combine(
@@ -164,9 +165,11 @@ def _build_create_task_payload(task_data, title_property, date_property):
     }
 
 
-def create_task_in_control_panel(task_data, project_logger=None):
+def create_task_in_control_panel(task_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_database_id.")
 
     create_data = {
         "database_id": notion_credentials["database_id"],
@@ -262,9 +265,11 @@ def _replace_page_content(page_id, headers):
         archive_response.raise_for_status()
 
 
-def update_notion_page(page_data, project_logger=None):
+def update_notion_page(page_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_database_id.")
 
     item_type = str(page_data.get("item_type", "")).strip().lower()
     if item_type not in {"task", "card"}:
@@ -432,50 +437,34 @@ def update_notion_page(page_data, project_logger=None):
     }
 
 
-def _get_notes_database_id(project_logger):
-    raw_notes_database_id = str(os.getenv("NOTION_NOTES_DB_ID", "")).strip()
-    if raw_notes_database_id:
-        normalized_id = _normalize_notion_object_id(raw_notes_database_id)
-        return normalized_id
-    error_message = "Missing required environment variable: NOTION_NOTES_DB_ID"
+def _resolve_notion_database_id(store_key, env_var, project_logger, user_id=None, store=None):
+    from utils.load_credentials import load_notion_db_id
+    db_id = load_notion_db_id(store_key, env_var, project_logger, user_id=user_id, store=store)
+    if db_id:
+        return _normalize_notion_object_id(db_id)
+    error_message = f"Missing required environment variable: {env_var}"
     project_logger.error(error_message)
     raise ValueError(error_message)
 
 
-def _get_expenses_database_id(project_logger):
-    raw_expenses_database_id = str(os.getenv("NOTION_EXPENSES_DB_ID", "")).strip()
-    if raw_expenses_database_id:
-        return _normalize_notion_object_id(raw_expenses_database_id)
-    error_message = "Missing required environment variable: NOTION_EXPENSES_DB_ID"
-    project_logger.error(error_message)
-    raise ValueError(error_message)
+def _get_notes_database_id(project_logger, user_id=None, store=None):
+    return _resolve_notion_database_id("notion_notes_db_id", "NOTION_NOTES_DB_ID", project_logger, user_id=user_id, store=store)
 
 
-def _get_monthly_bills_database_id(project_logger):
-    raw_monthly_bills_database_id = str(os.getenv("NOTION_MONTHLY_BILLS_DB_ID", "")).strip()
-    if raw_monthly_bills_database_id:
-        return _normalize_notion_object_id(raw_monthly_bills_database_id)
-    error_message = "Missing required environment variable: NOTION_MONTHLY_BILLS_DB_ID"
-    project_logger.error(error_message)
-    raise ValueError(error_message)
+def _get_expenses_database_id(project_logger, user_id=None, store=None):
+    return _resolve_notion_database_id("notion_expenses_db_id", "NOTION_EXPENSES_DB_ID", project_logger, user_id=user_id, store=store)
 
 
-def _get_meals_database_id(project_logger):
-    raw_meals_database_id = str(os.getenv("NOTION_MEALS_DB_ID", "")).strip()
-    if raw_meals_database_id:
-        return _normalize_notion_object_id(raw_meals_database_id)
-    error_message = "Missing required environment variable: NOTION_MEALS_DB_ID"
-    project_logger.error(error_message)
-    raise ValueError(error_message)
+def _get_monthly_bills_database_id(project_logger, user_id=None, store=None):
+    return _resolve_notion_database_id("notion_monthly_bills_db_id", "NOTION_MONTHLY_BILLS_DB_ID", project_logger, user_id=user_id, store=store)
 
 
-def _get_exercises_database_id(project_logger):
-    raw_exercises_database_id = str(os.getenv("NOTION_EXERCISES_DB_ID", "")).strip()
-    if raw_exercises_database_id:
-        return _normalize_notion_object_id(raw_exercises_database_id)
-    error_message = "Missing required environment variable: NOTION_EXERCISES_DB_ID"
-    project_logger.error(error_message)
-    raise ValueError(error_message)
+def _get_meals_database_id(project_logger, user_id=None, store=None):
+    return _resolve_notion_database_id("notion_meals_db_id", "NOTION_MEALS_DB_ID", project_logger, user_id=user_id, store=store)
+
+
+def _get_exercises_database_id(project_logger, user_id=None, store=None):
+    return _resolve_notion_database_id("notion_exercises_db_id", "NOTION_EXERCISES_DB_ID", project_logger, user_id=user_id, store=store)
 
 
 _MEAL_UNIT_ALIASES = {
@@ -897,10 +886,12 @@ def _build_note_payload_from_schema(create_data, schema_properties):
     return payload
 
 
-def create_note_in_notes_db(note_data, project_logger=None):
+def create_note_in_notes_db(note_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    notes_database_id = _get_notes_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_database_id.")
+    notes_database_id = _get_notes_database_id(project_logger, user_id=user_id, store=credential_store)
 
     note_name = str(note_data.get("note_name", "")).strip()
     if not note_name:
@@ -1070,10 +1061,12 @@ def create_note_in_notes_db(note_data, project_logger=None):
     raise RuntimeError("Failed to create note in Notion")
 
 
-def collect_notes_around_today(days_back=5, days_forward=5, project_logger=None):
+def collect_notes_around_today(days_back=5, days_forward=5, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    notes_database_id = _get_notes_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_database_id.")
+    notes_database_id = _get_notes_database_id(project_logger, user_id=user_id, store=credential_store)
 
     today = today_in_configured_timezone()
     start_date = (today - datetime.timedelta(days=max(days_back, 0))).isoformat()
@@ -1260,10 +1253,12 @@ def _build_notes_query_payload(candidate, start_date, end_date):
     }
 
 
-def create_expense_in_expenses_db(expense_data, project_logger=None):
+def create_expense_in_expenses_db(expense_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    expenses_database_id = _get_expenses_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_expenses_db_id.")
+    expenses_database_id = _get_expenses_database_id(project_logger, user_id=user_id, store=credential_store)
     schema_properties = _fetch_database_schema(expenses_database_id, notion_credentials["api_key"])
 
     expense_name = str(expense_data.get("name", "")).strip()
@@ -1372,10 +1367,12 @@ def create_expense_in_expenses_db(expense_data, project_logger=None):
     raise RuntimeError("Failed to create expense in Notion")
 
 
-def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=None):
+def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    expenses_database_id = _get_expenses_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_expenses_db_id.")
+    expenses_database_id = _get_expenses_database_id(project_logger, user_id=user_id, store=credential_store)
 
     query_candidates = [
         {
@@ -1547,10 +1544,12 @@ def collect_expenses_from_expenses_db(*, start_date, end_date, project_logger=No
     return all_expenses
 
 
-def create_meal_in_meals_db(meal_data, project_logger=None):
+def create_meal_in_meals_db(meal_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    meals_database_id = _get_meals_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_meals_db_id.")
+    meals_database_id = _get_meals_database_id(project_logger, user_id=user_id, store=credential_store)
     schema_properties = _fetch_database_schema(meals_database_id, notion_credentials["api_key"])
 
     food_name = str(meal_data.get("food", "")).strip()
@@ -1695,10 +1694,12 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
     raise RuntimeError("Failed to create meal in Notion")
 
 
-def collect_meals_from_database(*, start_datetime, end_datetime, project_logger=None):
+def collect_meals_from_database(*, start_datetime, end_datetime, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    meals_database_id = _get_meals_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_meals_db_id.")
+    meals_database_id = _get_meals_database_id(project_logger, user_id=user_id, store=credential_store)
 
     start_candidate = str(start_datetime or "").strip()
     end_candidate = str(end_datetime or "").strip()
@@ -1884,10 +1885,12 @@ def collect_meals_from_database(*, start_datetime, end_datetime, project_logger=
     )
 
 
-def create_exercise_in_exercises_db(exercise_data, project_logger=None):
+def create_exercise_in_exercises_db(exercise_data, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    exercises_database_id = _get_exercises_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_exercises_db_id.")
+    exercises_database_id = _get_exercises_database_id(project_logger, user_id=user_id, store=credential_store)
     schema_properties = _fetch_database_schema(exercises_database_id, notion_credentials["api_key"])
 
     activity = str(exercise_data.get("activity", "")).strip()
@@ -2015,10 +2018,14 @@ def update_exercise_in_exercises_db(
     observations=None,
     done=None,
     project_logger=None,
+    user_id=None,
+    credential_store=None,
 ):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    exercises_database_id = _get_exercises_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_exercises_db_id.")
+    exercises_database_id = _get_exercises_database_id(project_logger, user_id=user_id, store=credential_store)
     schema_properties = _fetch_database_schema(exercises_database_id, notion_credentials["api_key"])
 
     normalized_page_id = _normalize_notion_object_id(page_id)
@@ -2126,10 +2133,12 @@ def update_exercise_in_exercises_db(
     }
 
 
-def collect_exercises_from_database(*, start_datetime, end_datetime, project_logger=None):
+def collect_exercises_from_database(*, start_datetime, end_datetime, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    exercises_database_id = _get_exercises_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_exercises_db_id.")
+    exercises_database_id = _get_exercises_database_id(project_logger, user_id=user_id, store=credential_store)
 
     start_candidate = str(start_datetime or "").strip()
     end_candidate = str(end_datetime or "").strip()
@@ -2359,10 +2368,12 @@ def _coerce_boolean_value(raw_value, *, field_name):
     raise ValueError(f"{field_name} must be a boolean")
 
 
-def collect_monthly_bills_from_database(*, start_date, end_date, unpaid_only=False, project_logger=None):
+def collect_monthly_bills_from_database(*, start_date, end_date, unpaid_only=False, project_logger=None, user_id=None, credential_store=None):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    monthly_bills_database_id = _get_monthly_bills_database_id(project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_monthly_bills_db_id.")
+    monthly_bills_database_id = _get_monthly_bills_database_id(project_logger, user_id=user_id, store=credential_store)
 
     query_candidates = [
         {
@@ -2499,9 +2510,13 @@ def update_monthly_bill_payment(
     paid_amount=None,
     payment_date=None,
     project_logger=None,
+    user_id=None,
+    credential_store=None,
 ):
     project_logger = project_logger or logging.getLogger(__name__)
-    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
+    notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger, user_id=user_id, store=credential_store)
+    if not notion_credentials:
+        raise ValueError("Notion integration not configured. Please set notion_api_key and notion_monthly_bills_db_id.")
     normalized_page_id = _normalize_notion_object_id(page_id)
     if not normalized_page_id:
         raise ValueError("page_id is required")

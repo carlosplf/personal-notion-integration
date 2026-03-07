@@ -1,37 +1,36 @@
-# Personal Assistant for Discord :rocket:
+# Personal Assistant :rocket:
 
 ![Personal Assistant Banner](./banner/personal-assistant-banner.png)
 
-A personal digital assistant on Discord to help with your daily routine across multiple domains: tasks, email, calendar, readings, and news.
+A personal digital assistant on Telegram to help with your daily routine across multiple domains: tasks, email, calendar, expenses, meals, fitness, news, and more.
 
 Notion is one of the available connections, alongside OpenAI, Gmail, Google Calendar, and other assistant capabilities.
 
 ## What this project is
 
-This bot centralizes personal productivity workflows in Discord using slash commands and LLM support.
+This bot centralizes personal productivity workflows in Telegram using conversational messages and LLM-powered tool-calling.
 
 Current focus:
-- Task capture and prioritization
-- Calendar summary and event creation
-- Email-ready task summaries
-
-Planned/expanding scope:
-- Reading workflows
-- News digests
-- Broader personal assistant automations
+- Task capture and prioritization (Notion)
+- Calendar summary and event creation (Google Calendar)
+- Email management: send, search, read (Gmail)
+- Expense, meal, and exercise tracking (Notion)
+- Metabolism and fitness analytics
+- News digests and contact search
 
 ## Architecture at a glance
 
 Main modules:
 - `run.py`: app entrypoint
-- `discord_bot.py`: Discord client and slash commands
-- `notion_connector/`: task, notes, expenses, and meals read/write integration
-- `gmail_connector/`: Gmail auth and email sending
+- `telegram_bot.py`: Telegram bot client and message handlers
+- `google_auth_server.py`: background HTTP server for Google OAuth2 callback
+- `notion_connector/`: task, notes, expenses, meals, and exercises read/write integration
+- `gmail_connector/`: Gmail auth and email sending/reading
 - `calendar_connector/`: Google Calendar read/write integration
 - `openai_connector/`: LLM prompts/parsing/summaries
 - `assistant_connector/`: conversational agent runtime, tool registry, and SQLite memory
 - `templates/`: email rendering templates
-- `utils/`: logging, credential loading, parsing helpers
+- `utils/`: logging, credential loading, timezone helpers
 
 The conversational assistant is config-driven:
 - Agent + tool catalog: `assistant_connector/config/agents.json`
@@ -52,7 +51,12 @@ pip install -r requirements.txt
 Follow the Google API quickstart to create OAuth credentials:
 - https://developers.google.com/gmail/api/quickstart/python
 
-Place `credentials.json` in the project root. After first auth flow, `token.json` is generated.
+Place `credentials.json` in the project root.
+
+Google authentication is done **per-user via Telegram** using the `/google_auth` command (no manual `token.json` needed):
+1. Send `/google_auth` in the bot chat.
+2. Click the link, sign in with Google, and grant permissions.
+3. The bot stores the token securely per user in the SQLite database.
 
 ### 3) Notion credentials (optional but required for task commands)
 
@@ -65,25 +69,28 @@ Create a `.env` at project root:
 
 ```env
 NOTION_DATABASE_ID="8be..."
-NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes (/note and /notes)
+NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes
 NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Categoria, Descrição, Valor)
 NOTION_MEALS_DB_ID="5ab..."             # Notion meals DB (Alimento, Refeição, Quantidade em gramas, Calorias)
 NOTION_EXERCISES_DB_ID="6de..."         # Notion exercises DB (Data, Atividade, Calorias, Observações, Done)
+NOTION_MONTHLY_BILLS_DB_ID="3bc..."     # Notion monthly bills DB (optional)
 NOTION_API_KEY="secret_x0l..."
 OPENAI_KEY="sk-..."
-LLM_MODEL="gpt-4.1-mini"               # model used across assistant flows (/tasks, /calendar, /add_*, /bot)
-TIMEZONE="America/Sao_Paulo"           # default timezone for scheduled tasks when input has no offset
+LLM_MODEL="gpt-4.1-mini"               # model used for the assistant
+TIMEZONE="America/Sao_Paulo"           # default timezone for dates and scheduled tasks
 EMAIL_FROM="example@gmail.com"
-EMAIL_TO="example@gmail.com"            # optional for /bot; required for legacy automatic email flows
+EMAIL_TO="example@gmail.com"            # default recipient for email tools
 DISPLAY_NAME="Username"
 EMAIL_ASSISTANT_TONE="professional, friendly, and objective" # default tone for assistant-generated emails
 EMAIL_ASSISTANT_SIGNATURE="Carlos\nPersonal Assistant"        # default signature appended to the email body
 EMAIL_ASSISTANT_STYLE_GUIDE="Use short sentences and end with a clear CTA." # extra style instructions
 EMAIL_ASSISTANT_SUBJECT_PREFIX="[Assistant]"                 # optional subject prefix
 LOG_PATH="."
-DISCORD_BOT_TOKEN="your_bot_token_here"
-DISCORD_GUILD_ID="123456789012345678" # optional, faster slash-command sync
-DISCORD_ALLOWED_USER_ID="123456789012345678" # required for private operation; only this user can access slash + DM
+TELEGRAM_BOT_TOKEN="your_telegram_bot_token_here"           # required — get from @BotFather
+TELEGRAM_ALLOWED_USER_IDS="123456789"                       # required — comma-separated Telegram user IDs allowed to use the bot
+GOOGLE_OAUTH_CALLBACK_URL="https://yourdomain.com/auth/google/callback" # public URL for OAuth redirect
+GOOGLE_AUTH_SERVER_PORT="8080"          # port for the local OAuth callback HTTP server
+CREDENTIAL_ENCRYPTION_KEY="..."        # required — Fernet key; generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 API_DAYS_TO_CONSIDER="0"               # optional, includes overdue + next N days
 ASSISTANT_AGENT_ID="personal_assistant" # optional, agent id loaded from JSON config
 ASSISTANT_MEMORY_PATH="./assistant_memory.sqlite3" # optional, SQLite file for persistent chat memory
@@ -93,16 +100,16 @@ ASSISTANT_MAX_STORED_MESSAGE_CHARS="4000" # optional, max chars per stored messa
 ASSISTANT_MAX_STORED_TOOL_PAYLOAD_CHARS="12000" # optional, max chars per stored tool payload
 ASSISTANT_MAX_HISTORY_CHARS="12000" # optional, max history chars sent to the LLM per request
 ASSISTANT_MAX_TOOL_OUTPUT_CHARS="8000" # optional, max tool output chars sent back to the LLM
-AUDIO_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe" # optional, model used to transcribe DM audio attachments
+AUDIO_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe" # optional, model used to transcribe voice messages
 ```
 
 Notes:
-- `DISCORD_BOT_TOKEN` is required to run the assistant.
-- `DISCORD_ALLOWED_USER_ID` should be set to your Discord user ID for private operation.
-- If `DISCORD_ALLOWED_USER_ID` is empty, access is denied by default (fail-closed behavior).
-- Notion vars are required for Notion-related task and notes flows.
-- To send email through `/bot`, keep Gmail OAuth configured (`credentials.json` + `token.json`) and set `EMAIL_ASSISTANT_*` fields.
-- In `/bot`, the `send_email` tool requires an explicit recipient in the user message; the subject is defined by the LLM.
+- `TELEGRAM_BOT_TOKEN` is required to run the assistant. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram.
+- `TELEGRAM_ALLOWED_USER_IDS` should contain your Telegram user ID for private operation. Access is denied by default if empty (fail-closed behavior).
+- `CREDENTIAL_ENCRYPTION_KEY` is required — user credentials (Google tokens, Notion keys) are stored encrypted.
+- `GOOGLE_OAUTH_CALLBACK_URL` must be a publicly reachable URL pointing to the machine running the bot (used for the OAuth redirect from Google).
+- Notion vars are required for Notion-related flows.
+- Per-user credentials (Notion API key, email settings, etc.) can be configured by sending `configure <key>: <value>` to the bot, or via the `/setup` command.
 
 ## Run
 
@@ -110,52 +117,56 @@ Notes:
 python run.py
 ```
 
-## Discord commands (current)
+## Telegram commands and conversational mode
 
-- `/tasks` - List scheduled assistant tasks stored in SQLite.
-- `/create_task <message> <scheduled_for> [max_attempts] [timezone] [email_to]` - Create a scheduled assistant task (`scheduled_for` can omit offset; uses `TIMEZONE` or explicit `timezone` override such as `America/Sao_Paulo` or `GMT-3`). Delivery is always sent to Discord DM, and optionally also to `email_to`.
-- `/notion_tasks` - Fetch Notion tasks and return a prioritized Markdown summary.
-- `/add_task <text>` - Parse natural language and create a Notion task.
-- `/note` - Open a multiline modal and create a note in Notion Notes.
-- `/notes` - List notes from 5 days back to 5 days ahead.
-- `/calendar` - Summarize the next 7 days from Google Calendar.
-- `/add_event <text>` - Parse natural language and create a calendar event.
-- `/day` - Detailed summary for today (tasks + events).
-- `/tomorrow` - Detailed summary for tomorrow (tasks + events).
-- `/week` - Concise summary for the current week (Sunday to Saturday).
-- `/bot <text>` - Conversational assistant with tool-calling + persistent memory.
-- `/pa <text>` - Alias of `/bot`.
+The bot works entirely through natural language messages in Telegram. There are no slash commands to memorize — just talk to it.
 
-### Conversational mode via DM
+Built-in commands:
+- `/reset` (or `/new_chat`) — Clear the conversation history for the current chat.
+- `/setup` — Show the integration setup panel (Notion, Email, Google).
+- `/google_auth` — Start the Google OAuth2 flow to authorize Gmail and Google Calendar.
 
-- You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
-- In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
-- DM audio attachments are transcribed and processed by the same assistant flow.
-- In conversational mode, the assistant can use tools for Notion tasks/notes/meals/exercises (`register_notion_meal`, `analyze_notion_meals`, `register_notion_exercise`, `edit_notion_exercise`, `analyze_notion_exercises`) and should use `done=false` to plan future workouts and `done=true` when marking completed activities; meal registration is LLM-driven and must send calories + quantity in grams (no local calorie fallback); it can also use calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
-- For expense analysis, `analyze_monthly_expenses` supports `date` (YYYY-MM-DD) to isolate and detail one specific day (e.g., today).
+### What the assistant can do
+
+In any message, the assistant can:
+- **Notion tasks**: list, create, and edit tasks; manage projects and due dates.
+- **Notion notes**: create and list notes with date filters.
+- **Expenses**: register and analyze monthly expenses by category.
+- **Meals**: log meals with food, quantity (in grams), and estimated calories.
+- **Exercises**: register, edit, and analyze workouts; track calories burned.
+- **Metabolism**: calculate BMR/TDEE and track changes over time.
+- **Google Calendar**: list upcoming events and create new events.
+- **Gmail**: send emails (with explicit confirmation), search and read messages.
+- **Scheduled tasks**: create recurring or one-time tasks delivered via Telegram (and optionally email).
+- **Tech news**: fetch the latest news from configured RSS sources.
+- **Contacts**: search contacts from `memories/contacts.csv`.
+- **Voice messages**: voice notes are transcribed automatically (Whisper) and processed as text.
+
+For expense analysis, `analyze_monthly_expenses` supports a `date` parameter (YYYY-MM-DD) to isolate a specific day.
+Meal registration requires explicit quantity in grams and estimated calories (LLM-provided, no local fallback).
 
 ## Run as Ubuntu service (systemd)
 
 Service template:
 
-`deploy/systemd/personal-notion-discord-bot.service`
+`deploy/systemd/personal-assistant-bot.service`
 
 Install and start (system service, requires sudo):
 
 ```sh
-sudo cp deploy/systemd/personal-notion-discord-bot.service /etc/systemd/system/
+sudo cp deploy/systemd/personal-assistant-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now personal-notion-discord-bot
-sudo systemctl status personal-notion-discord-bot --no-pager
+sudo systemctl enable --now personal-assistant-bot
+sudo systemctl status personal-assistant-bot --no-pager
 ```
 
 If sudo is unavailable, run as a user service:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp deploy/systemd/personal-notion-discord-bot.service ~/.config/systemd/user/personal-notion-discord-bot.service
-sed -i '/^User=/d; s/multi-user.target/default.target/' ~/.config/systemd/user/personal-notion-discord-bot.service
+cp deploy/systemd/personal-assistant-bot.service ~/.config/systemd/user/personal-assistant-bot.service
+sed -i '/^User=/d; s/multi-user.target/default.target/' ~/.config/systemd/user/personal-assistant-bot.service
 systemctl --user daemon-reload
-systemctl --user enable --now personal-notion-discord-bot
-systemctl --user status personal-notion-discord-bot --no-pager
+systemctl --user enable --now personal-assistant-bot
+systemctl --user status personal-assistant-bot --no-pager
 ```

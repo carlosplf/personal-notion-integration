@@ -17,10 +17,10 @@ def send_email(arguments, context):
     if not body:
         raise ValueError("body is required")
 
-    tone = str(arguments.get("tone_override", "")).strip() or _get_email_tone()
-    signature = _get_email_signature()
+    tone = str(arguments.get("tone_override", "")).strip() or _get_email_tone(context)
+    signature = _get_email_signature(context)
 
-    final_subject = _apply_subject_prefix(subject)
+    final_subject = _apply_subject_prefix(subject, context)
     final_body = _compose_email_body(body, signature=signature)
 
     send_result = gmail_connector.send_custom_email(
@@ -30,6 +30,8 @@ def send_email(arguments, context):
         email_to=recipient,
         body_subtype="plain",
         reply_to_message_id=reply_to_message_id or None,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "status": "sent",
@@ -50,6 +52,8 @@ def search_emails(arguments, context):
         query=query,
         max_results=max_results,
         include_body=include_body,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
@@ -62,6 +66,8 @@ def read_email(arguments, context):
         project_logger=context.project_logger,
         message_id=message_id,
         include_body=include_body,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
@@ -74,6 +80,8 @@ def search_email_attachments(arguments, context):
         query=query,
         filename_contains=filename_contains,
         max_results=max_results,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
@@ -92,11 +100,18 @@ def analyze_email_attachment(arguments, context):
         attachment_id=attachment_id or None,
         filename=filename or None,
         max_chars=max_chars,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
 
 
-def _apply_subject_prefix(subject):
-    prefix = str(os.getenv("EMAIL_ASSISTANT_SUBJECT_PREFIX", "")).strip()
+def _apply_subject_prefix(subject, context=None):
+    store = getattr(context, "user_credential_store", None)
+    user_id = getattr(context, "user_id", None)
+    if store is not None and user_id is not None:
+        prefix = store.get_credential(user_id, "email_subject_prefix") or ""
+    else:
+        prefix = str(os.getenv("EMAIL_ASSISTANT_SUBJECT_PREFIX", "")).strip()
     if not prefix:
         return subject
     return f"{prefix} {subject}".strip()
@@ -109,13 +124,23 @@ def _compose_email_body(body, *, signature):
     return "".join(sections).strip()
 
 
-def _get_email_tone():
+def _get_email_tone(context=None):
+    store = getattr(context, "user_credential_store", None)
+    user_id = getattr(context, "user_id", None)
+    if store is not None and user_id is not None:
+        value = store.get_credential(user_id, "email_tone")
+        if value:
+            return value
     return str(
         os.getenv("EMAIL_ASSISTANT_TONE", "claro, cordial e objetivo")
     ).strip() or "claro, cordial e objetivo"
 
 
-def _get_email_signature():
+def _get_email_signature(context=None):
+    store = getattr(context, "user_credential_store", None)
+    user_id = getattr(context, "user_id", None)
+    if store is not None and user_id is not None:
+        return store.get_credential(user_id, "email_signature") or ""
     return str(os.getenv("EMAIL_ASSISTANT_SIGNATURE", "")).strip()
 
 

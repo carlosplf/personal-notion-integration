@@ -12,7 +12,10 @@ REQUIRED_COLUMNS = ("Nome", "email", "telefone", "relacionamento")
 
 def search_contacts(arguments, _context):
     query = str(arguments.get("query", "")).strip().lower()
-    limit = int(arguments.get("limit", 20))
+    try:
+        limit = int(arguments.get("limit", 20))
+    except (ValueError, TypeError):
+        raise ValueError("limit must be a valid integer")
     limit = min(max(limit, 1), 100)
 
     contacts = _read_contacts_csv()

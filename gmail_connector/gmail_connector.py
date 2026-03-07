@@ -12,7 +12,6 @@ from googleapiclient.errors import HttpError
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 
 from email.mime.text import MIMEText
 
@@ -29,29 +28,52 @@ SCOPES = [
     ]
 
 
-def gmail_connect(project_logger):
+def gmail_connect(project_logger, user_id=None, credential_store=None):
     """
-    Create a Google GMail connection using GCloud credentials.
-    This method expects a 'credentials.json' local file and
-    a token.json file is created after validating credentials.
+    Create a Google Gmail service object.
+
+    Credential resolution order:
+    1. Per-user token stored in credential_store (if user_id + store provided)
+    2. System-level token.json file
+    3. ValueError — interactive browser flow is NOT supported (headless server)
     """
     creds = None
+    _from_store = False
 
-    project_logger.debug("Connecting GMAIL Oauth2...")
+    project_logger.debug("Connecting Gmail OAuth2...")
 
-    if os.path.exists('token.json'):
-        creds = _load_credentials_from_token('token.json', SCOPES, project_logger)
+    if credential_store is not None and user_id is not None:
+        raw = credential_store.get_credential(str(user_id), "google_token_json", use_env_fallback=False)
+        if raw:
+            try:
+                creds = Credentials.from_authorized_user_info(json.loads(raw), SCOPES)
+                _from_store = True
+            except Exception:
+                project_logger.warning("Failed to parse stored Google token for user %s", user_id)
+                creds = None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    if creds is None and os.path.exists("token.json"):
+        creds = _load_credentials_from_token("token.json", SCOPES, project_logger)
+
+    if not creds:
+        raise ValueError(
+            "Google não autorizado. Use /google_auth para autorizar sua conta Google."
+        )
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            if _from_store and credential_store is not None and user_id is not None:
+                credential_store.set_credential(str(user_id), "google_token_json", creds.to_json())
+            else:
+                with open("token.json", "w") as token:
+                    token.write(creds.to_json())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
+            raise ValueError(
+                "Token do Google inválido ou expirado. Use /google_auth para reautorizar."
+            )
 
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+    return build("gmail", "v1", credentials=creds)
 
 
 def build_email_body(all_tasks, display_name, chatgpt_answer,
@@ -90,15 +112,13 @@ def build_email_body(all_tasks, display_name, chatgpt_answer,
 
 
 def send_email_with_tasks(all_tasks, chatgpt_answer, project_logger,
-                          fake_send=False):
+                          fake_send=False, user_id=None, credential_store=None):
     """
-    Considering a already created token.json file based on GCloud credentials,
-    send an email using GMail API.
+    Send an email with task summary using Gmail API.
     """
     project_logger.info("Sending email...")
-    creds = _load_credentials_from_token('token.json', SCOPES, project_logger)
     email_config = load_credentials.load_email_config(
-        project_logger=project_logger
+        project_logger=project_logger, user_id=user_id, store=credential_store
     )
     email_message = build_email_body(
         all_tasks,
@@ -115,7 +135,7 @@ def send_email_with_tasks(all_tasks, chatgpt_answer, project_logger,
         return True
 
     try:
-        service = build('gmail', 'v1', credentials=creds)
+        service = gmail_connect(project_logger, user_id=user_id, credential_store=credential_store)
         message = MIMEText(email_message, 'html')
 
         message['To'] = email_config["email_to"]
@@ -148,6 +168,8 @@ def send_custom_email(
     body_subtype="plain",
     reply_to_message_id=None,
     fake_send=False,
+    user_id=None,
+    credential_store=None,
 ):
     """
     Send a custom email through Gmail API.
@@ -181,8 +203,7 @@ def send_custom_email(
             "reply_to_message_id": str(reply_to_message_id or "").strip() or None,
         }
 
-    creds = _load_credentials_from_token("token.json", SCOPES, project_logger)
-    service = build("gmail", "v1", credentials=creds)
+    service = gmail_connect(project_logger, user_id=user_id, credential_store=credential_store)
     send_payload = {}
     clean_reply_to_message_id = str(reply_to_message_id or "").strip()
     if clean_reply_to_message_id:
@@ -230,13 +251,13 @@ def _get_reply_metadata(service, message_id):
     }
 
 
-def search_emails(project_logger, query="", max_results=10, include_body=False):
+def search_emails(project_logger, query="", max_results=10, include_body=False, user_id=None, credential_store=None):
     """
     Search Gmail messages and return normalized metadata.
     """
     clean_query = str(query or "").strip()
     limit = max(1, min(int(max_results or 10), 50))
-    service = _build_gmail_service(project_logger)
+    service = _build_gmail_service(project_logger, user_id=user_id, credential_store=credential_store)
     search_kwargs = {"userId": "me", "maxResults": limit}
     if clean_query:
         search_kwargs["q"] = clean_query
@@ -260,14 +281,14 @@ def search_emails(project_logger, query="", max_results=10, include_body=False):
     }
 
 
-def read_email(project_logger, message_id, include_body=True):
+def read_email(project_logger, message_id, include_body=True, user_id=None, credential_store=None):
     """
     Read a specific Gmail message by ID.
     """
     clean_message_id = str(message_id or "").strip()
     if not clean_message_id:
         raise ValueError("message_id is required")
-    service = _build_gmail_service(project_logger)
+    service = _build_gmail_service(project_logger, user_id=user_id, credential_store=credential_store)
     details = service.users().messages().get(
         userId="me",
         id=clean_message_id,
@@ -282,6 +303,8 @@ def search_email_attachments(
     query="",
     filename_contains="",
     max_results=20,
+    user_id=None,
+    credential_store=None,
 ):
     """
     Search attachment metadata across Gmail messages.
@@ -298,8 +321,10 @@ def search_email_attachments(
         query=attachment_query,
         max_results=limit,
         include_body=False,
+        user_id=user_id,
+        credential_store=credential_store,
     )
-    service = _build_gmail_service(project_logger)
+    service = _build_gmail_service(project_logger, user_id=user_id, credential_store=credential_store)
     matches = []
     for email_item in search_result.get("emails", []):
         details = service.users().messages().get(
@@ -340,6 +365,8 @@ def analyze_email_attachment(
     attachment_id=None,
     filename=None,
     max_chars=8000,
+    user_id=None,
+    credential_store=None,
 ):
     """
     Download and extract text content from one email attachment.
@@ -352,7 +379,7 @@ def analyze_email_attachment(
     if not clean_attachment_id and not clean_filename:
         raise ValueError("attachment_id or filename is required")
 
-    service = _build_gmail_service(project_logger)
+    service = _build_gmail_service(project_logger, user_id=user_id, credential_store=credential_store)
     message = service.users().messages().get(
         userId="me",
         id=clean_message_id,
@@ -420,9 +447,8 @@ def _extract_first_json_object(content):
     return payload
 
 
-def _build_gmail_service(project_logger):
-    creds = _load_credentials_from_token("token.json", SCOPES, project_logger)
-    return build("gmail", "v1", credentials=creds)
+def _build_gmail_service(project_logger, user_id=None, credential_store=None):
+    return gmail_connect(project_logger, user_id=user_id, credential_store=credential_store)
 
 
 def _normalize_message_payload(message, include_body=False):

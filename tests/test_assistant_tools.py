@@ -120,6 +120,10 @@ class TestAssistantTools(unittest.TestCase):
 
         self.assertEqual(result["returned"], 0)
 
+    def test_list_tech_news_rejects_invalid_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be a valid integer"):
+            news_tools.list_tech_news({"limit": "many"}, _build_context())
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_tasks_from_control_panel")
     def test_list_notion_tasks_clamps_inputs(self, mock_collect_tasks):
         mock_collect_tasks.return_value = [{"name": f"Task {i}"} for i in range(60)]
@@ -129,7 +133,7 @@ class TestAssistantTools(unittest.TestCase):
             _build_context(),
         )
 
-        mock_collect_tasks.assert_called_once_with(n_days=0, project_logger=unittest.mock.ANY)
+        mock_collect_tasks.assert_called_once_with(n_days=0, project_logger=unittest.mock.ANY, user_id=unittest.mock.ANY, credential_store=None)
         self.assertEqual(result["returned"], 50)
         self.assertEqual(len(result["tasks"]), 50)
 
@@ -159,6 +163,13 @@ class TestAssistantTools(unittest.TestCase):
                 _build_context(),
             )
 
+    def test_create_notion_task_rejects_invalid_due_date(self):
+        with self.assertRaisesRegex(ValueError, "due_date must be a valid ISO date"):
+            notion_tools.create_notion_task(
+                {"task_name": "Task", "due_date": "31/12/2026"},
+                _build_context(),
+            )
+
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_notes_around_today")
     def test_list_notion_notes_clamps_inputs(self, mock_collect_notes):
         mock_collect_notes.return_value = [{"name": f"Note {i}"} for i in range(120)]
@@ -168,7 +179,7 @@ class TestAssistantTools(unittest.TestCase):
             _build_context(),
         )
 
-        mock_collect_notes.assert_called_once_with(days_back=0, days_forward=0, project_logger=unittest.mock.ANY)
+        mock_collect_notes.assert_called_once_with(days_back=0, days_forward=0, project_logger=unittest.mock.ANY, user_id=unittest.mock.ANY, credential_store=None)
         self.assertEqual(result["returned"], 100)
         self.assertEqual(len(result["notes"]), 100)
 
@@ -204,6 +215,20 @@ class TestAssistantTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             notion_tools.create_notion_note(
                 {"note_name": "   ", "observations": "conteúdo"},
+                _build_context(),
+            )
+
+    def test_register_financial_expense_rejects_non_numeric_amount(self):
+        with self.assertRaisesRegex(ValueError, "amount must be a valid number"):
+            notion_tools.register_financial_expense(
+                {"description": "Almoço", "amount": "abc"},
+                _build_context(),
+            )
+
+    def test_register_financial_expense_rejects_invalid_date(self):
+        with self.assertRaisesRegex(ValueError, "expense_date must be a valid ISO date"):
+            notion_tools.register_financial_expense(
+                {"description": "Almoço", "amount": "50", "expense_date": "31/12/2026"},
                 _build_context(),
             )
 
@@ -266,6 +291,13 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(payload["quantity"], "150 g")
         self.assertEqual(payload["date"], "2026-03-10")
         self.assertEqual(payload["estimated_calories"], 190)
+
+    def test_register_notion_meal_rejects_invalid_date(self):
+        with self.assertRaisesRegex(ValueError, "date must be a valid ISO date"):
+            notion_tools.register_notion_meal(
+                {"alimento": "Frango", "refeicao": "almoço", "quantidade": "100 g", "data": "10/03/2026", "calorias_estimadas": 200},
+                _build_context(),
+            )
 
     def test_register_notion_meal_requires_fields(self):
         with self.assertRaises(ValueError):
@@ -346,6 +378,20 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(payload["calories"], 300.0)
         self.assertEqual(payload["date"], "2999-03-10")
         self.assertFalse(payload["done"])
+
+    def test_register_notion_exercise_rejects_invalid_date(self):
+        with self.assertRaisesRegex(ValueError, "date must be a valid ISO date"):
+            notion_tools.register_notion_exercise(
+                {"atividade": "Corrida", "calorias": 300, "data": "10/03/2026"},
+                _build_context(),
+            )
+
+    def test_register_notion_exercise_rejects_non_numeric_calories(self):
+        with self.assertRaisesRegex(ValueError, "calorias must be a valid number"):
+            notion_tools.register_notion_exercise(
+                {"atividade": "Corrida", "calorias": "muitas", "data": "2026-03-10"},
+                _build_context(),
+            )
 
     @patch("assistant_connector.tools.notion_tools.notion_connector.update_exercise_in_exercises_db")
     def test_edit_notion_exercise_updates_payload(self, mock_update_exercise):
@@ -692,6 +738,20 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(payload["note_name"], "Retro semanal")
         self.assertEqual(payload["date"], "2026-03-10")
 
+    def test_edit_notion_item_rejects_invalid_due_date(self):
+        with self.assertRaisesRegex(ValueError, "due_date must be a valid ISO date"):
+            notion_tools.edit_notion_item(
+                {"item_type": "task", "page_id": "task-id", "due_date": "31/12/2026"},
+                _build_context(),
+            )
+
+    def test_edit_notion_item_rejects_invalid_card_date(self):
+        with self.assertRaisesRegex(ValueError, "date must be a valid ISO date"):
+            notion_tools.edit_notion_item(
+                {"item_type": "card", "page_id": "card-id", "date": "not-a-date"},
+                _build_context(),
+            )
+
     def test_edit_notion_item_requires_editable_fields(self):
         with self.assertRaises(ValueError):
             notion_tools.edit_notion_item(
@@ -737,6 +797,10 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(payload["content_mode"], "replace")
         self.assertIn("Novo conteúdo", payload["content"])
 
+    def test_list_calendar_events_rejects_non_integer_max_results(self):
+        with self.assertRaisesRegex(ValueError, "max_results must be a valid integer"):
+            calendar_tools.list_calendar_events({"max_results": "muitos"}, _build_context())
+
     @patch("assistant_connector.tools.calendar_tools.calendar_connector.list_week_events")
     def test_list_calendar_events_clamps_max_results(self, mock_list_events):
         mock_list_events.return_value = [{"id": "1"}]
@@ -746,7 +810,7 @@ class TestAssistantTools(unittest.TestCase):
             _build_context(),
         )
 
-        mock_list_events.assert_called_once_with(project_logger=unittest.mock.ANY, max_results=100)
+        mock_list_events.assert_called_once_with(project_logger=unittest.mock.ANY, max_results=100, user_id=unittest.mock.ANY, credential_store=None)
         self.assertEqual(result["total"], 1)
 
     @patch("assistant_connector.tools.calendar_tools.calendar_connector.create_calendar_event")
@@ -843,7 +907,7 @@ class TestAssistantTools(unittest.TestCase):
                 os.environ,
                 {
                     "ASSISTANT_MEMORY_PATH": db_path,
-                    "DISCORD_ALLOWED_USER_ID": "user",
+                    "TELEGRAM_ALLOWED_USER_ID": "user",
                 },
                 clear=False,
             ):
@@ -887,7 +951,7 @@ class TestAssistantTools(unittest.TestCase):
                 os.environ,
                 {
                     "ASSISTANT_MEMORY_PATH": db_path,
-                    "DISCORD_ALLOWED_USER_ID": "user",
+                    "TELEGRAM_ALLOWED_USER_ID": "user",
                 },
                 clear=False,
             ):
@@ -1055,6 +1119,20 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(kwargs["message_id"], "m1")
         self.assertEqual(kwargs["attachment_id"], "att-1")
         self.assertEqual(kwargs["max_chars"], 900)
+
+    def test_search_contacts_rejects_non_integer_limit(self):
+        csv_content = (
+            "Nome, email, telefone, relacionamento\n"
+            "Maria,maria@example.com,11999990000,amiga\n"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = os.path.join(temp_dir, "contacts.csv")
+            with open(csv_path, "w", encoding="utf-8") as csv_file:
+                csv_file.write(csv_content)
+
+            with patch("assistant_connector.tools.contacts_tools.CONTACTS_CSV_PATH", csv_path):
+                with self.assertRaisesRegex(ValueError, "limit must be a valid integer"):
+                    contacts_tools.search_contacts({"query": "maria", "limit": "many"}, _build_context())
 
     def test_search_contacts_filters_by_query(self):
         csv_content = (

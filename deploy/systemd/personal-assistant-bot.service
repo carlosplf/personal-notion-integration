@@ -1,5 +1,5 @@
 [Unit]
-Description=Personal Assistant Discord Bot
+Description=Personal Assistant Telegram Bot
 After=network.target
 
 [Service]

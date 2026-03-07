@@ -23,7 +23,7 @@ PROMPT_TEMPLATE_FILE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "openai_prompt_template.txt")
 )
 DEFAULT_PROMPT = (
-    "Você é um assistente de produtividade e deve responder em português para mensagem do Discord."
+    "Você é um assistente de produtividade e deve responder em português para mensagem do Telegram."
     "\nObjetivo: priorizar tarefas, explicar rapidamente os motivos e sugerir próximo passo."
     "\n\nFormato obrigatório da resposta (Markdown):"
     "\n## Prioridades de hoje"
@@ -83,7 +83,7 @@ NOTE_PARSER_PROMPT = (
     "\n{\"note_name\":\"Ideia para onboarding\",\"tag\":\"IDEA\",\"observations\":\"Criar checklist inicial para novos clientes.\",\"url\":\"\"}"
 )
 CALENDAR_SUMMARY_PROMPT = (
-    "Você é um assistente e deve resumir eventos da agenda da semana para Discord em português."
+    "Você é um assistente e deve resumir eventos da agenda da semana para o assistente pessoal em português."
     "\nFormato obrigatório em Markdown:"
     "\n## Agenda da semana"
     "\n- **DD/MM HH:MM** — Evento (contexto curto)"
@@ -96,7 +96,7 @@ CALENDAR_SUMMARY_PROMPT = (
     "\n- Se não houver eventos, responda exatamente: \"Sem eventos na agenda para os próximos 7 dias.\""
 )
 DAY_SUMMARY_PROMPT = (
-    "Você é um assistente pessoal e deve gerar um resumo do dia para Discord em português."
+    "Você é um assistente pessoal e deve gerar um resumo do dia em português."
     "\nFormato obrigatório em Markdown:"
     "\n## Resumo do dia"
     "\n### Tarefas de hoje"
@@ -410,7 +410,7 @@ def build_period_summary_prompt(period_label, tasks, events):
 
     if _is_week_period(period_key):
         prompt_header = (
-            f"Você é um assistente pessoal e deve gerar um resumo {summary_title} para Discord em português."
+            f"Você é um assistente pessoal e deve gerar um resumo {summary_title} em português."
             "\nFormato obrigatório em Markdown:"
             f"\n## Resumo {summary_title}"
             f"\n### {section_tasks}"
@@ -429,7 +429,7 @@ def build_period_summary_prompt(period_label, tasks, events):
         )
     else:
         prompt_header = (
-            f"Você é um assistente pessoal e deve gerar um resumo {summary_title} para Discord em português."
+            f"Você é um assistente pessoal e deve gerar um resumo {summary_title} em português."
             "\nFormato obrigatório em Markdown:"
             f"\n## Resumo {summary_title}"
             f"\n### {section_tasks}"

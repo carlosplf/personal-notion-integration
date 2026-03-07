@@ -4,12 +4,17 @@ from calendar_connector import calendar_connector
 
 
 def list_calendar_events(arguments, context):
-    max_results = int(arguments.get("max_results", 20))
+    try:
+        max_results = int(arguments.get("max_results", 20))
+    except (ValueError, TypeError):
+        raise ValueError("max_results must be a valid integer")
     max_results = min(max(max_results, 1), 100)
 
     events = calendar_connector.list_week_events(
         project_logger=context.project_logger,
         max_results=max_results,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )
     return {
         "total": len(events),
@@ -38,4 +43,6 @@ def create_calendar_event(arguments, context):
         end_datetime=end_datetime,
         description=description,
         timezone=timezone,
+        user_id=context.user_id,
+        credential_store=context.user_credential_store,
     )

@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 
 def _get_required_env(env_key, project_logger):
@@ -11,28 +12,50 @@ def _get_required_env(env_key, project_logger):
     raise ValueError(error_message)
 
 
-def load_notion_credentials(project_logger):
-    project_logger.debug("Getting Notion credentials from .env...")
+def _resolve(key: str, env_key: str, user_id: Optional[str], store) -> Optional[str]:
+    """Resolve a credential: store first (if provided), then env var fallback."""
+    if store is not None and user_id is not None:
+        value = store.get_credential(user_id, key, use_env_fallback=False)
+        if value:
+            return value
+    return os.getenv(env_key) or None
 
-    notion_keys = {
-        "database_id": _get_required_env("NOTION_DATABASE_ID", project_logger),
-        "api_key": _get_required_env("NOTION_API_KEY", project_logger),
-    }
+
+def load_notion_credentials(project_logger, user_id: Optional[str] = None, store=None):
+    project_logger.debug("Getting Notion credentials...")
+
+    database_id = _resolve("notion_database_id", "NOTION_DATABASE_ID", user_id, store)
+    api_key = _resolve("notion_api_key", "NOTION_API_KEY", user_id, store)
+
+    if not database_id or not api_key:
+        project_logger.debug("Notion credentials not configured for user %s.", user_id)
+        return None
 
     project_logger.debug("Finished getting Notion credentials.")
+    return {"database_id": database_id, "api_key": api_key}
 
-    return notion_keys
 
+def load_email_config(project_logger, user_id: Optional[str] = None, store=None):
+    project_logger.debug("Getting EMAIL credentials...")
 
-def load_email_config(project_logger):
-    project_logger.debug("Getting EMAIL credentials from .env...")
+    email_from = _resolve("email_from", "EMAIL_FROM", user_id, store)
+    email_to = _resolve("email_to", "EMAIL_TO", user_id, store)
+    display_name = _resolve("display_name", "DISPLAY_NAME", user_id, store)
 
-    email_config = {
-        "email_from": _get_required_env("EMAIL_FROM", project_logger),
-        "email_to": _get_required_env("EMAIL_TO", project_logger),
-        "display_name": _get_required_env("DISPLAY_NAME", project_logger),
-    }
+    if not email_from or not email_to or not display_name:
+        project_logger.debug("Email config not fully configured for user %s.", user_id)
+        return None
 
     project_logger.debug("Finished getting EMAIL credentials.")
+    return {"email_from": email_from, "email_to": email_to, "display_name": display_name}
 
-    return email_config
+
+def load_notion_db_id(
+    key: str,
+    env_key: str,
+    project_logger,
+    user_id: Optional[str] = None,
+    store=None,
+) -> Optional[str]:
+    """Load a specific Notion database ID from store or env var."""
+    return _resolve(key, env_key, user_id, store)
