@@ -58,58 +58,86 @@ Google authentication is done **per-user via Telegram** using the `/google_auth`
 2. Click the link, sign in with Google, and grant permissions.
 3. The bot stores the token securely per user in the SQLite database.
 
-### 3) Notion credentials (optional but required for task commands)
+### 3) Notion credentials
 
-Follow the Notion auth guide:
-- https://developers.notion.com/docs/authorization
+Notion credentials are configured **per-user via the bot** (not in `.env`). After starting the bot, send `/setup` or tell the bot `configure notion_api_key: secret_xxx`. See [User credentials](#user-credentials) below.
 
 ### 4) Configure `.env`
 
-Create a `.env` at project root:
+Create a `.env` at project root.
+
+**Required to run the server:**
 
 ```env
-NOTION_DATABASE_ID="8be..."
-NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes
-NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Categoria, Descrição, Valor)
-NOTION_MEALS_DB_ID="5ab..."             # Notion meals DB (Alimento, Refeição, Quantidade em gramas, Calorias)
-NOTION_EXERCISES_DB_ID="6de..."         # Notion exercises DB (Data, Atividade, Calorias, Observações, Done)
-NOTION_MONTHLY_BILLS_DB_ID="3bc..."     # Notion monthly bills DB (optional)
-NOTION_API_KEY="secret_x0l..."
-OPENAI_KEY="sk-..."
-LLM_MODEL="gpt-4.1-mini"               # model used for the assistant
-TIMEZONE="America/Sao_Paulo"           # default timezone for dates and scheduled tasks
-EMAIL_FROM="example@gmail.com"
-EMAIL_TO="example@gmail.com"            # default recipient for email tools
-DISPLAY_NAME="Username"
-EMAIL_ASSISTANT_TONE="professional, friendly, and objective" # default tone for assistant-generated emails
-EMAIL_ASSISTANT_SIGNATURE="Carlos\nPersonal Assistant"        # default signature appended to the email body
-EMAIL_ASSISTANT_STYLE_GUIDE="Use short sentences and end with a clear CTA." # extra style instructions
-EMAIL_ASSISTANT_SUBJECT_PREFIX="[Assistant]"                 # optional subject prefix
-LOG_PATH="."
+# Telegram
 TELEGRAM_BOT_TOKEN="your_telegram_bot_token_here"           # required — get from @BotFather
-TELEGRAM_ALLOWED_USER_IDS="123456789"                       # required — comma-separated Telegram user IDs allowed to use the bot
-GOOGLE_OAUTH_CALLBACK_URL="https://yourdomain.com/auth/google/callback" # public URL for OAuth redirect
-GOOGLE_AUTH_SERVER_PORT="8080"          # port for the local OAuth callback HTTP server
-CREDENTIAL_ENCRYPTION_KEY="..."        # required — Fernet key; generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-API_DAYS_TO_CONSIDER="0"               # optional, includes overdue + next N days
-ASSISTANT_AGENT_ID="personal_assistant" # optional, agent id loaded from JSON config
-ASSISTANT_MEMORY_PATH="./assistant_memory.sqlite3" # optional, SQLite file for persistent chat memory
-ASSISTANT_MAX_MESSAGES_PER_SESSION="300" # optional, max persisted messages per session
-ASSISTANT_MAX_TOOL_CALLS_PER_SESSION="300" # optional, max persisted tool calls per session
-ASSISTANT_MAX_STORED_MESSAGE_CHARS="4000" # optional, max chars per stored message
-ASSISTANT_MAX_STORED_TOOL_PAYLOAD_CHARS="12000" # optional, max chars per stored tool payload
-ASSISTANT_MAX_HISTORY_CHARS="12000" # optional, max history chars sent to the LLM per request
-ASSISTANT_MAX_TOOL_OUTPUT_CHARS="8000" # optional, max tool output chars sent back to the LLM
-AUDIO_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe" # optional, model used to transcribe voice messages
+TELEGRAM_ALLOWED_USER_IDS="123456789"                       # required — comma-separated Telegram user IDs
+CREDENTIAL_ENCRYPTION_KEY="..."                             # required — generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# OpenAI
+OPENAI_KEY="sk-..."
+
+# Google OAuth (for Gmail + Calendar)
+GOOGLE_OAUTH_CALLBACK_URL="https://yourdomain.com/auth/google/callback"  # public URL for OAuth redirect
+GOOGLE_AUTH_SERVER_PORT="8080"                              # port for the local OAuth callback HTTP server
 ```
 
-Notes:
-- `TELEGRAM_BOT_TOKEN` is required to run the assistant. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram.
-- `TELEGRAM_ALLOWED_USER_IDS` should contain your Telegram user ID for private operation. Access is denied by default if empty (fail-closed behavior).
-- `CREDENTIAL_ENCRYPTION_KEY` is required — user credentials (Google tokens, Notion keys) are stored encrypted.
-- `GOOGLE_OAUTH_CALLBACK_URL` must be a publicly reachable URL pointing to the machine running the bot (used for the OAuth redirect from Google).
-- Notion vars are required for Notion-related flows.
-- Per-user credentials (Notion API key, email settings, etc.) can be configured by sending `configure <key>: <value>` to the bot, or via the `/setup` command.
+**Optional server-level defaults** (can be overridden per-user via `/setup`):
+
+```env
+LLM_MODEL="gpt-4.1-mini"                                   # LLM model for the assistant
+TIMEZONE="America/Sao_Paulo"                                # timezone for dates and scheduled tasks
+LOG_PATH="."
+API_DAYS_TO_CONSIDER="0"                                    # includes overdue + next N days in task queries
+AUDIO_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe"             # model used to transcribe voice messages
+```
+
+**Optional assistant tuning:**
+
+```env
+ASSISTANT_AGENT_ID="personal_assistant"
+ASSISTANT_MEMORY_PATH="./assistant_memory.sqlite3"
+ASSISTANT_MAX_MESSAGES_PER_SESSION="300"
+ASSISTANT_MAX_TOOL_CALLS_PER_SESSION="300"
+ASSISTANT_MAX_STORED_MESSAGE_CHARS="4000"
+ASSISTANT_MAX_STORED_TOOL_PAYLOAD_CHARS="12000"
+ASSISTANT_MAX_HISTORY_CHARS="12000"
+ASSISTANT_MAX_TOOL_OUTPUT_CHARS="8000"
+```
+
+> **Note:** Notion and email variables (`NOTION_API_KEY`, `NOTION_DATABASE_ID`, `EMAIL_FROM`, `EMAIL_TO`, etc.) can still be set in `.env` as global defaults, but are overridden by the per-user credentials stored in the database. See [User credentials](#user-credentials).
+
+## User credentials
+
+Integration credentials (Notion keys, email settings) are stored **per-user and encrypted** in SQLite — not in `.env`. Each Telegram user configures their own credentials via the bot.
+
+**Set a credential:**
+> *"configure notion_api_key: secret_xxx"*
+> *"configure email_from: me@example.com"*
+
+Or use the `/setup` command for a guided panel.
+
+**Supported credential keys:**
+
+| Key | Description |
+|-----|-------------|
+| `notion_api_key` | Notion integration secret |
+| `notion_database_id` | Main tasks database ID |
+| `notion_notes_db_id` | Notes database ID |
+| `notion_expenses_db_id` | Expenses database ID |
+| `notion_meals_db_id` | Meals database ID |
+| `notion_exercises_db_id` | Exercises database ID |
+| `notion_monthly_bills_db_id` | Monthly bills database ID |
+| `email_from` | Gmail address to send from |
+| `email_to` | Default email recipient |
+| `display_name` | Display name used in emails |
+| `email_tone` | Tone for assistant-written emails |
+| `email_signature` | Signature appended to emails |
+| `email_style_guide` | Extra style instructions for email |
+| `email_subject_prefix` | Optional prefix added to email subjects |
+
+Google (Gmail + Calendar) credentials are managed automatically via `/google_auth` — no manual key entry needed.
+
 
 ## Run
 
