@@ -1235,6 +1235,58 @@
       "write_operation": true,
       "prompt_guidance": "Use manage_user_credentials quando o usuário quiser configurar, ver ou remover suas credenciais de integração (Notion, email, etc.). Após um 'set' bem-sucedido, confirme que foi salvo e mostre o status das integrações. NUNCA mostre, repita ou confirme o valor exato de uma credencial.",
       "guidance_priority": 10
+    },
+    {
+      "name": "list_memory_files",
+      "description": "Lista todos os arquivos de memória do usuário atual (arquivos .md na pasta de memórias do usuário).",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "handler": "assistant_connector.tools.memory_tools:list_memory_files"
+    },
+    {
+      "name": "read_memory_file",
+      "description": "Lê o conteúdo completo de um arquivo de memória do usuário. Use para verificar o que já está salvo antes de editar.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "Nome do arquivo a ser lido (ex: 'about-me.md', 'health.md'). Deve terminar com .md."
+          }
+        },
+        "required": ["file_name"]
+      },
+      "handler": "assistant_connector.tools.memory_tools:read_memory_file"
+    },
+    {
+      "name": "edit_memory_file",
+      "description": "Cria ou atualiza um arquivo de memória do usuário. Use mode='replace' para substituir o conteúdo completo ou mode='append' para adicionar ao final. Arquivos de memória persistem entre sessões e são injetados no contexto do assistente.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "Nome do arquivo de memória (ex: 'about-me.md', 'health.md', 'work.md'). Deve terminar com .md."
+          },
+          "content": {
+            "type": "string",
+            "description": "Conteúdo a ser escrito ou adicionado ao arquivo. Use Markdown para formatar."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["append", "replace"],
+            "description": "'append' adiciona ao final do arquivo (padrão). 'replace' substitui o conteúdo completo."
+          }
+        },
+        "required": ["file_name", "content"]
+      },
+      "handler": "assistant_connector.tools.memory_tools:edit_memory_file",
+      "write_operation": true,
+      "prompt_guidance": "Use edit_memory_file para salvar informações persistentes sobre o usuário que devem ser lembradas em conversas futuras. Sempre leia o arquivo com read_memory_file antes de substituir (mode='replace') para não perder dados. Prefira mode='append' para adicionar informações novas. Crie arquivos temáticos (health.md, work.md, preferences.md) para organizar melhor. Nunca salve credenciais ou dados sensíveis em memórias.",
+      "guidance_priority": 20
     }
   ],
   "agents": [
@@ -1280,7 +1332,10 @@
         "calculate_metabolism_profile",
         "register_metabolism_profile",
         "get_metabolism_history",
-        "manage_user_credentials"
+        "manage_user_credentials",
+        "list_memory_files",
+        "read_memory_file",
+        "edit_memory_file"
       ]
     }
   ]

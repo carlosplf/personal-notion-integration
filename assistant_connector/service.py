@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from assistant_connector.config_loader import load_assistant_configuration
 from assistant_connector.memory_store import ConversationMemoryStore
-from assistant_connector.runtime import AssistantRuntime
+from assistant_connector.runtime import AssistantRuntime, _load_memories_from_dir
 from assistant_connector.tool_registry import ToolRegistry
 
 
@@ -290,7 +290,7 @@ def create_assistant_service(
     )
     agent_memory_file = os.getenv("ASSISTANT_AGENT_MEMORY_FILE", "personal-assistant.md")
     user_memory_file = os.getenv("ASSISTANT_USER_MEMORY_FILE", "about-me.md")
-    agent_memory_text, user_memories = _load_memories(
+    agent_memory_text, _ = _load_memories_from_dir(
         memories_dir=memories_dir,
         agent_memory_file=agent_memory_file,
         user_memory_file=user_memory_file,
@@ -313,7 +313,9 @@ def create_assistant_service(
         max_history_chars=max_history_chars,
         max_tool_output_chars=max_tool_output_chars,
         agent_memory_text=agent_memory_text,
-        user_memories=user_memories,
+        memories_dir=memories_dir,
+        agent_memory_file=agent_memory_file,
+        user_memory_file=user_memory_file,
         max_user_memory_chars=max_user_memory_chars,
         openai_client=openai_client,
         user_credential_store=user_credential_store,
@@ -368,38 +370,3 @@ def _build_scheduled_execution_message(task_message: str) -> str:
         "Pedido agendado:\n"
         f"{message}"
     )
-
-
-def _load_memories(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
-    resolved_dir = str(memories_dir or "").strip()
-    if not resolved_dir or not os.path.isdir(resolved_dir):
-        return "", {}
-
-    files = sorted(
-        file_name
-        for file_name in os.listdir(resolved_dir)
-        if file_name.lower().endswith(".md")
-    )
-    agent_file_name = str(agent_memory_file or "personal-assistant.md").strip()
-    user_priority_file_name = str(user_memory_file or "about-me.md").strip()
-
-    agent_memory_text = ""
-    user_memories = {}
-    for file_name in files:
-        if file_name.lower() == "readme.md":
-            continue
-        full_path = os.path.join(resolved_dir, file_name)
-        with open(full_path, "r", encoding="utf-8") as memory_file:
-            content = memory_file.read().strip()
-        if not content:
-            continue
-        if file_name == agent_file_name:
-            agent_memory_text = content
-            continue
-        user_memories[file_name] = content
-
-    if user_priority_file_name in user_memories:
-        priority_content = user_memories.pop(user_priority_file_name)
-        user_memories = {user_priority_file_name: priority_content, **user_memories}
-
-    return agent_memory_text, user_memories

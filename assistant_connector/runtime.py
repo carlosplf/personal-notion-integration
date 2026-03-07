@@ -20,6 +20,44 @@ BLOCKED_SCHEDULED_EXECUTION_TOOLS = {
 }
 
 
+def _load_memories_from_dir(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
+    """Load agent memory text and per-user memory files from a directory.
+
+    Returns (agent_memory_text, user_memories_dict).
+    """
+    if not memories_dir or not os.path.isdir(memories_dir):
+        return "", {}
+
+    files = sorted(
+        file_name
+        for file_name in os.listdir(memories_dir)
+        if file_name.lower().endswith(".md")
+    )
+    agent_file_name = str(agent_memory_file or "personal-assistant.md").strip()
+    user_priority_file_name = str(user_memory_file or "about-me.md").strip()
+
+    agent_memory_text = ""
+    user_memories: dict[str, str] = {}
+    for file_name in files:
+        if file_name.lower() == "readme.md":
+            continue
+        full_path = os.path.join(memories_dir, file_name)
+        with open(full_path, "r", encoding="utf-8") as memory_file:
+            content = memory_file.read().strip()
+        if not content:
+            continue
+        if file_name == agent_file_name:
+            agent_memory_text = content
+            continue
+        user_memories[file_name] = content
+
+    if user_priority_file_name in user_memories:
+        priority_content = user_memories.pop(user_priority_file_name)
+        user_memories = {user_priority_file_name: priority_content, **user_memories}
+
+    return agent_memory_text, user_memories
+
+
 class AssistantRuntime:
     def __init__(
         self,
@@ -33,6 +71,9 @@ class AssistantRuntime:
         max_tool_output_chars: int = 8000,
         agent_memory_text: str = "",
         user_memories: dict[str, str] | None = None,
+        memories_dir: str | None = None,
+        agent_memory_file: str = "personal-assistant.md",
+        user_memory_file: str = "about-me.md",
         max_user_memory_chars: int = 3000,
         openai_client=None,
         user_credential_store=None,
@@ -45,11 +86,15 @@ class AssistantRuntime:
         self._max_history_chars = max(1000, int(max_history_chars))
         self._max_tool_output_chars = max(1000, int(max_tool_output_chars))
         self._agent_memory_text = str(agent_memory_text or "").strip()
-        self._user_memories = {
+        # Static user_memories are kept for backward compatibility when memories_dir is not set
+        self._static_user_memories = {
             key: str(value).strip()
             for key, value in (user_memories or {}).items()
             if str(value).strip()
         }
+        self._memories_dir = str(memories_dir or "").strip() or None
+        self._agent_memory_file = str(agent_memory_file or "personal-assistant.md").strip()
+        self._user_memory_file = str(user_memory_file or "about-me.md").strip()
         self._max_user_memory_chars = max(500, int(max_user_memory_chars))
         self._openai_client = openai_client or self._create_openai_client()
         self._user_credential_store = user_credential_store
@@ -67,6 +112,8 @@ class AssistantRuntime:
         if not clean_message:
             raise ValueError("User message cannot be empty")
 
+        user_memories = self._resolve_user_memories(user_id)
+
         self._memory_store.append_message(session_id, "user", clean_message)
         history = self._memory_store.get_recent_messages(
             session_id=session_id,
@@ -75,6 +122,7 @@ class AssistantRuntime:
         history = self._trim_history_by_chars(history)
 
         available_tools = self._tool_registry.describe_tools(self._agent.tools)
+        user_memories_dir = self._resolve_user_memories_dir(user_id)
         context = ToolExecutionContext(
             session_id=session_id,
             user_id=user_id,
@@ -85,11 +133,12 @@ class AssistantRuntime:
             available_tools=available_tools,
             available_agents=self._available_agents,
             user_credential_store=self._user_credential_store,
+            memories_dir=user_memories_dir,
         )
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(
             model=self._agent.model,
-            input=self._build_input_messages(history, clean_message),
+            input=self._build_input_messages(history, clean_message, user_memories),
             tools=openai_tools,
         )
 
@@ -155,6 +204,7 @@ class AssistantRuntime:
         self,
         history: list[dict[str, str]],
         user_message: str,
+        user_memories: dict[str, str],
     ) -> list[dict[str, str]]:
         system_message = (
             f"{self._agent.system_prompt}\n\n"
@@ -178,7 +228,7 @@ class AssistantRuntime:
             )
 
         messages = [{"role": "system", "content": system_message}]
-        user_memory_context = self._select_user_memory_context(user_message)
+        user_memory_context = self._select_user_memory_context(user_message, user_memories)
         if user_memory_context:
             messages.append(
                 {
@@ -194,14 +244,44 @@ class AssistantRuntime:
             for message in history
         ]
 
-    def _select_user_memory_context(self, user_message: str) -> str:
-        if not self._user_memories:
+    def _resolve_user_memories_dir(self, user_id: str) -> str | None:
+        """Return the resolved per-user memories directory path, or None if not configured."""
+        if not self._memories_dir:
+            return None
+        user_dir = os.path.join(self._memories_dir, str(user_id))
+        if os.path.isdir(user_dir):
+            return user_dir
+        # Fallback: use root memories dir if no user-specific subfolder exists yet
+        if os.path.isdir(self._memories_dir):
+            return self._memories_dir
+        return None
+
+    def _resolve_user_memories(self, user_id: str) -> dict[str, str]:
+        """Load memory files for the given user from their memories subfolder.
+
+        Resolution order:
+        1. memories/{user_id}/ — per-user subfolder
+        2. memories/ — root fallback if no user subfolder exists
+        3. Static memories passed at runtime init (legacy)
+        """
+        user_dir = self._resolve_user_memories_dir(user_id)
+        if user_dir:
+            _, user_memories = _load_memories_from_dir(
+                memories_dir=user_dir,
+                agent_memory_file=self._agent_memory_file,
+                user_memory_file=self._user_memory_file,
+            )
+            return user_memories
+        return self._static_user_memories
+
+    def _select_user_memory_context(self, user_message: str, user_memories: dict[str, str]) -> str:
+        if not user_memories:
             return ""
 
         query = str(user_message or "").lower()
         tokens = set(re.findall(r"[a-z0-9à-ÿ_]{3,}", query))
         scored = []
-        for file_name, content in self._user_memories.items():
+        for file_name, content in user_memories.items():
             sample = f"{file_name.lower()} {content[:1200].lower()}"
             score = 0
             if file_name.lower() in ("about-me.md", "about_me.md", "about-user.md", "about_user.md"):
@@ -211,8 +291,8 @@ class AssistantRuntime:
                 scored.append((score, file_name, content))
 
         if not scored:
-            first_name = next(iter(self._user_memories))
-            scored = [(1, first_name, self._user_memories[first_name])]
+            first_name = next(iter(user_memories))
+            scored = [(1, first_name, user_memories[first_name])]
 
         scored.sort(key=lambda item: item[0], reverse=True)
         selected = scored[:2]

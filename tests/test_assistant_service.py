@@ -231,8 +231,10 @@ class TestAssistantService(unittest.TestCase):
                     openai_client=_FakeOpenAIClient(payloads),
                 )
 
+        # Agent memory is loaded at startup from the base memories_dir
         self.assertIn("Agent memory style", service._runtime._agent_memory_text)
-        self.assertIn("about-me.md", service._runtime._user_memories)
+        # User memories are now loaded per-user dynamically; static cache is empty when memories_dir is set
+        self.assertEqual(service._runtime._static_user_memories, {})
 
 
 if __name__ == "__main__":

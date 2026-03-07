@@ -10,7 +10,17 @@ CONTACTS_CSV_PATH = os.path.abspath(
 REQUIRED_COLUMNS = ("Nome", "email", "telefone", "relacionamento")
 
 
-def search_contacts(arguments, _context):
+def _resolve_contacts_path(context) -> str:
+    """Return per-user contacts.csv path if it exists, otherwise fall back to the global default."""
+    memories_dir = str(getattr(context, "memories_dir", "") or "").strip()
+    if memories_dir:
+        user_contacts = os.path.join(memories_dir, "contacts.csv")
+        if os.path.isfile(user_contacts):
+            return user_contacts
+    return CONTACTS_CSV_PATH
+
+
+def search_contacts(arguments, context):
     query = str(arguments.get("query", "")).strip().lower()
     try:
         limit = int(arguments.get("limit", 20))
@@ -18,7 +28,8 @@ def search_contacts(arguments, _context):
         raise ValueError("limit must be a valid integer")
     limit = min(max(limit, 1), 100)
 
-    contacts = _read_contacts_csv()
+    contacts_path = _resolve_contacts_path(context)
+    contacts = _read_contacts_csv(contacts_path)
     if query:
         contacts = [
             contact
@@ -36,11 +47,11 @@ def search_contacts(arguments, _context):
     }
 
 
-def _read_contacts_csv():
-    if not os.path.exists(CONTACTS_CSV_PATH):
-        raise FileNotFoundError(f"Contacts file not found: {CONTACTS_CSV_PATH}")
+def _read_contacts_csv(contacts_path: str = CONTACTS_CSV_PATH):
+    if not os.path.exists(contacts_path):
+        raise FileNotFoundError(f"Contacts file not found: {contacts_path}")
 
-    with open(CONTACTS_CSV_PATH, "r", encoding="utf-8", newline="") as csv_file:
+    with open(contacts_path, "r", encoding="utf-8", newline="") as csv_file:
         reader = csv.DictReader(csv_file, delimiter=",")
         header = [str(column).strip() for column in (reader.fieldnames or []) if column is not None]
         missing_columns = [column for column in REQUIRED_COLUMNS if column not in header]
@@ -61,3 +72,4 @@ def _read_contacts_csv():
                 }
             )
         return contacts
+
