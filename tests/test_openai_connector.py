@@ -172,6 +172,32 @@ class TestOpenAIConnector(unittest.TestCase):
 
         self.assertEqual(parsed["task_name"], "Enviar proposta")
         self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+        self.assertIn("Contexto temporal operacional do usuário", fake_client.responses.calls[0]["input"])
+
+    def test_parse_add_task_input_includes_temporal_context(self):
+        fake_client = _FakeOpenAIClient(
+            '{"task_name":"Enviar proposta","project":"Draiven","due_date":"2026-03-05","tags":["FAST"]}'
+        )
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.object(
+            llm_api,
+            "build_time_context",
+            return_value={
+                "timezone_name": "America/Sao_Paulo",
+                "local_now_iso": "2026-03-01T22:30:00-03:00",
+                "local_date_iso": "2026-03-01",
+                "local_utc_offset": "-03:00",
+                "utc_now_iso": "2026-03-02T01:30:00Z",
+                "utc_date_iso": "2026-03-02",
+            },
+        ):
+            llm_api.parse_add_task_input(
+                "enviar proposta amanhã",
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
+        prompt_input = fake_client.responses.calls[0]["input"]
+        self.assertIn("Timezone: America/Sao_Paulo", prompt_input)
+        self.assertIn("Data local atual: 2026-03-01", prompt_input)
+        self.assertIn("interprete termos relativos de tempo", prompt_input)
 
     def test_parse_add_note_input_uses_llm_model_from_env(self):
         fake_client = _FakeOpenAIClient(
@@ -184,6 +210,15 @@ class TestOpenAIConnector(unittest.TestCase):
 
         self.assertEqual(parsed["note_name"], "Ideia")
         self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+
+    def test_parse_add_event_output_uses_configured_timezone_when_missing(self):
+        output = (
+            '{"summary":"Reunião de kickoff","start_datetime":"2026-03-06T10:00",'
+            '"end_datetime":"2026-03-06T11:00","description":"Alinhamento inicial"}'
+        )
+        with unittest.mock.patch.object(llm_api, "get_configured_timezone_name", return_value="America/Sao_Paulo"):
+            parsed = llm_api.parse_add_event_output(output)
+        self.assertEqual(parsed["timezone"], "America/Sao_Paulo")
 
     def test_transcribe_audio_input_uses_transcribe_model_from_env(self):
         fake_client = _FakeOpenAIClient("unused", transcript_text="texto transcrito")

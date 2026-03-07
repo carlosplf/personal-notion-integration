@@ -338,6 +338,8 @@
     {
       "name": "register_financial_expense",
       "description": "Registra um gasto como nova página no database de despesas do Notion (NOTION_EXPENSES_DB_ID), preenchendo Valor e usando categoria consistente para análises futuras.",
+      "prompt_guidance": "Quando registrar gastos, priorize categorias consistentes e úteis para análises futuras. Se houver ambiguidade de categoria, escolha a mais estável para relatórios mensais.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_financial_expense",
       "write_operation": true,
       "input_schema": {
@@ -374,6 +376,8 @@
     {
       "name": "analyze_monthly_expenses",
       "description": "Consulta e analisa gastos do mês no database de despesas, com totais, breakdowns e lista detalhada (inclusive filtro por dia).",
+      "prompt_guidance": "Quando o usuário pedir gastos de hoje ou de um dia específico, use o parâmetro date (YYYY-MM-DD) para retornar lista detalhada do dia, além de totais.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:analyze_monthly_expenses",
       "write_operation": false,
       "input_schema": {
@@ -708,6 +712,8 @@
     {
       "name": "send_email",
       "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
+      "prompt_guidance": "No uso de send_email, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional. Só envie se o destinatário tiver sido informado explicitamente pelo usuário.",
+      "guidance_priority": 20,
       "handler": "assistant_connector.tools.email_tools:send_email",
       "write_operation": true,
       "input_schema": {
@@ -753,6 +759,8 @@
     {
       "name": "list_unpaid_monthly_bills",
       "description": "Lista contas fixas mensais ainda não pagas no Notion (NOTION_MONTHLY_BILLS_DB_ID).",
+      "prompt_guidance": "Para contas fixas mensais, use esta tool para consultar pendências antes de recomendar pagamento ou ajustes.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:list_unpaid_monthly_bills",
       "write_operation": false,
       "input_schema": {
@@ -775,6 +783,8 @@
     {
       "name": "mark_monthly_bill_as_paid",
       "description": "Marca uma conta fixa mensal como paga no Notion, com valor pago opcional.",
+      "prompt_guidance": "Use esta tool para registrar pagamento de conta fixa mensal somente após confirmação explícita do usuário.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:mark_monthly_bill_as_paid",
       "write_operation": true,
       "input_schema": {
@@ -806,6 +816,8 @@
     {
       "name": "analyze_monthly_bills",
       "description": "Analisa contas fixas mensais do Notion, com totais, pendências e breakdown por categoria.",
+      "prompt_guidance": "Use esta tool para análises de contas fixas mensais (totais, pendências e categorias) e para orientar priorização de pagamentos.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:analyze_monthly_bills",
       "write_operation": false,
       "input_schema": {
@@ -821,7 +833,9 @@
     },
     {
       "name": "register_notion_meal",
-      "description": "Registra alimento consumido no Notion Meals e preenche calorias por estimativa local/LLM (sem API externa).",
+      "description": "Registra alimento consumido no Notion Meals usando calorias estimadas pela LLM e quantidade normalizada em gramas.",
+      "prompt_guidance": "Ao registrar refeição, use categorias exatamente entre ALMOÇO, JANTAR, LANCHE e CAFÉ DA MANHÃ. Quantidade deve ser convertida para gramas antes do registro e calorias estimadas devem ser informadas. Se não houver confiança para estimar calorias e converter para gramas, peça confirmação ao usuário em vez de registrar dados parciais.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_notion_meal",
       "write_operation": true,
       "input_schema": {
@@ -855,13 +869,14 @@
           },
           "calorias_estimadas": {
             "type": "number",
-            "description": "Estimativa opcional de calorias calculada pela LLM quando necessário."
+            "description": "Estimativa obrigatória de calorias calculada pela LLM para a porção em gramas."
           }
         },
         "required": [
           "alimento",
           "refeicao",
-          "quantidade"
+          "quantidade",
+          "calorias_estimadas"
         ],
         "additionalProperties": false
       }
@@ -869,6 +884,8 @@
     {
       "name": "analyze_notion_meals",
       "description": "Analisa refeições registradas no Notion Meals e retorna métricas + insights nutricionais.",
+      "prompt_guidance": "Ao analisar refeições, entregue orientações incisivas e diretas sobre qualidade alimentar e cobre plano de correção com ações concretas quando identificar desvios.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:analyze_notion_meals",
       "write_operation": false,
       "input_schema": {
@@ -899,6 +916,8 @@
     {
       "name": "register_notion_exercise",
       "description": "Registra atividade física no Notion Exercises com calorias e status de conclusão (Done), incluindo planejamento futuro.",
+      "prompt_guidance": "Para exercícios no Notion, use done=false ao planejar atividades futuras e done=true quando a atividade estiver concluída.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_notion_exercise",
       "write_operation": true,
       "input_schema": {
@@ -982,6 +1001,8 @@
     {
       "name": "analyze_notion_exercises",
       "description": "Analisa atividades físicas no Notion Exercises considerando o campo Done e correlaciona com refeições.",
+      "prompt_guidance": "Ao analisar exercícios, acompanhe pendências vs concluídas com base no campo Done e, quando relevante, correlacione calorias de refeições com exercícios.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:analyze_notion_exercises",
       "write_operation": false,
       "input_schema": {
@@ -1016,6 +1037,8 @@
     {
       "name": "calculate_metabolism_profile",
       "description": "Calcula metabolismo basal (BMR) e gasto diário total (TDEE) com base em dados corporais e atividade.",
+      "prompt_guidance": "Use esta tool para calcular estimativas de metabolismo de forma confiável antes de recomendações nutricionais ou de treino.",
+      "guidance_priority": 40,
       "handler": "assistant_connector.tools.metabolism_tools:calculate_metabolism_profile",
       "write_operation": false,
       "input_schema": {
@@ -1078,6 +1101,8 @@
     {
       "name": "register_metabolism_profile",
       "description": "Registra no SQLite local um novo histórico de metabolismo (BMR/TDEE) com timestamp e contexto corporal.",
+      "prompt_guidance": "Quando houver atualização confirmada de metabolismo, registre no SQLite local para manter histórico como fonte de verdade.",
+      "guidance_priority": 40,
       "handler": "assistant_connector.tools.metabolism_tools:register_metabolism_profile",
       "write_operation": true,
       "input_schema": {
@@ -1156,6 +1181,8 @@
     {
       "name": "get_metabolism_history",
       "description": "Consulta histórico metabólico salvo no SQLite local (BMR/TDEE), retornando também o registro mais recente.",
+      "prompt_guidance": "Antes de recomendar ajustes metabólicos, consulte o histórico para evitar conclusões sem contexto temporal.",
+      "guidance_priority": 40,
       "handler": "assistant_connector.tools.metabolism_tools:get_metabolism_history",
       "write_operation": false,
       "input_schema": {
@@ -1179,7 +1206,7 @@
       "model": "gpt-4.1-mini",
       "max_tool_rounds": 6,
       "memory_window": 20,
-      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais (tarefas/agenda) e para executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Em emails, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional não pedido. Para controle financeiro, registre gastos no database de despesas com register_financial_expense (priorize categorias consistentes e úteis para análise) e, quando o usuário pedir consulta/relatório de despesas, use analyze_monthly_expenses. Para perguntas sobre gastos de hoje ou de um dia específico, use o parâmetro date (YYYY-MM-DD) e traga a lista detalhada do dia. Para contas fixas mensais, consulte pendências com list_unpaid_monthly_bills, marque pagamentos com mark_monthly_bill_as_paid e faça análises com analyze_monthly_bills. Suas respostas devem ser bem formatadas em Markdown, com título, organização clara e linguagem objetiva. Para acompanhamento nutricional, registre refeições com register_notion_meal (calorias por estimativa da própria LLM/lógica local, sem depender de API externa) usando categorias exatamente entre ALMOÇO, JANTAR, LANCHE e CAFÉ DA MANHÃ, sempre convertendo a quantidade para gramas antes de registrar no Notion (ex.: 3 ovos -> ~150 g), e consulte padrões com analyze_notion_meals para dar orientações incisivas e diretas sobre qualidade alimentar, cobrando plano de correção com ações concretas quando identificar desvios. Para atividades físicas, use o campo Done do Notion Exercises: registre/planeje com register_notion_exercise (done=false para atividades futuras e done=true para concluídas), ajuste status com edit_notion_exercise e use analyze_notion_exercises para acompanhar pendências vs concluídas e correlacionar calorias de refeições vs exercícios. Para metabolismo basal/TDEE, use calculate_metabolism_profile para calcular estimativas confiáveis, consulte get_metabolism_history antes de recomendações e salve atualizações com register_metabolism_profile mantendo histórico no SQLite local como fonte de verdade (não dependa do valor em about-me.md).",
+      "system_prompt": "Você é um assistente pessoal digital no Discord e deve responder em português do Brasil. Use ferramentas quando necessário para recuperar dados reais e executar ações solicitadas. Para ações de escrita, só use confirmed=true quando houver confirmação explícita do usuário. Se o usuário pedir quais tools existem, liste os nomes e para que servem. Ao listar eventos de agenda, não inclua links automaticamente: mostre apenas nome, dia e horário; só inclua links se o usuário pedir explicitamente detalhes do evento. Preserve fidelidade ao pedido do usuário e não invente conteúdo adicional não solicitado.",
       "tools": [
         "list_available_tools",
         "list_available_agents",

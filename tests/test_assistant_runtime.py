@@ -31,6 +31,10 @@ def _large_payload_tool(_arguments, _context):
     return {"content": "x" * 5000}
 
 
+def _guided_tool(_arguments, _context):
+    return {"ok": True}
+
+
 class _FakeLogger:
     def exception(self, *_args, **_kwargs):
         return None
@@ -1028,6 +1032,155 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertIn("Tom de voz: amigável e direto", system_message)
         self.assertIn("Assinatura padrão:", system_message)
         self.assertIn("destinatário tiver sido informado explicitamente", system_message)
+
+    def test_runtime_injects_timezone_context_guidance(self):
+        payloads = [{"id": "resp-1", "output": [], "output_text": "ok"}]
+        tool_definitions = {
+            "list_available_tools": ToolDefinition(
+                name="list_available_tools",
+                description="Lista tools",
+                input_schema={"type": "object", "properties": {}},
+                handler="assistant_connector.tools.meta_tools:list_available_tools",
+                write_operation=False,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "assistant_connector.runtime.build_time_context",
+            return_value={
+                "timezone_name": "America/Sao_Paulo",
+                "local_now_iso": "2026-03-01T22:30:00-03:00",
+                "local_date_iso": "2026-03-01",
+                "local_utc_offset": "-03:00",
+                "utc_now_iso": "2026-03-02T01:30:00Z",
+                "utc_date_iso": "2026-03-02",
+            },
+        ):
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["list_available_tools"],
+            )
+            runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="oi",
+            )
+
+        system_message = runtime._openai_client.responses.calls[0]["input"][0]["content"]
+        self.assertIn("Timezone operacional: America/Sao_Paulo", system_message)
+        self.assertIn("Data local atual: 2026-03-01", system_message)
+        self.assertIn("interprete termos relativos de tempo", system_message)
+
+    def test_runtime_injects_dynamic_tool_guidance_after_function_call(self):
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "guided_tool",
+                        "arguments": "{}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "ok",
+            },
+        ]
+        tool_definitions = {
+            "guided_tool": ToolDefinition(
+                name="guided_tool",
+                description="Tool com guidance",
+                input_schema={"type": "object", "properties": {}},
+                handler="tests.test_assistant_runtime:_guided_tool",
+                write_operation=False,
+                prompt_guidance="Aplique regra específica de execução desta tool.",
+                guidance_priority=2,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["guided_tool"],
+            )
+            runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="execute",
+            )
+
+        second_input = runtime._openai_client.responses.calls[1]["input"]
+        self.assertEqual(second_input[0]["type"], "function_call_output")
+        self.assertEqual(second_input[-1]["role"], "system")
+        self.assertIn("### guided_tool", second_input[-1]["content"])
+        self.assertIn("Aplique regra específica", second_input[-1]["content"])
+
+    def test_runtime_deduplicates_dynamic_guidance_for_repeated_tool_calls(self):
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {"type": "function_call", "name": "guided_tool", "arguments": "{}", "call_id": "call-1"},
+                    {"type": "function_call", "name": "guided_tool", "arguments": "{}", "call_id": "call-2"},
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "ok",
+            },
+        ]
+        tool_definitions = {
+            "guided_tool": ToolDefinition(
+                name="guided_tool",
+                description="Tool com guidance",
+                input_schema={"type": "object", "properties": {}},
+                handler="tests.test_assistant_runtime:_guided_tool",
+                write_operation=False,
+                prompt_guidance="Guidance único por tool no round.",
+                guidance_priority=2,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["guided_tool"],
+            )
+            runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="execute duas vezes",
+            )
+
+        second_input = runtime._openai_client.responses.calls[1]["input"]
+        self.assertEqual(second_input[0]["type"], "function_call_output")
+        self.assertEqual(second_input[1]["type"], "function_call_output")
+        guidance_blocks = [
+            item["content"]
+            for item in second_input
+            if item.get("role") == "system"
+        ]
+        self.assertEqual(len(guidance_blocks), 1)
+        self.assertEqual(guidance_blocks[0].count("### guided_tool"), 1)
 
 
 if __name__ == "__main__":

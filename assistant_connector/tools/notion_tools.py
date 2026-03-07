@@ -335,6 +335,8 @@ def register_notion_meal(arguments, context):
         raise ValueError("alimento is required")
     if not quantity:
         raise ValueError("quantidade is required")
+    if estimated_calories is None:
+        raise ValueError("calorias_estimadas is required")
     datetime.date.fromisoformat(meal_date)
 
     created_meal = notion_connector.create_meal_in_meals_db(

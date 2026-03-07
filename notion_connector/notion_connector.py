@@ -478,91 +478,6 @@ def _get_exercises_database_id(project_logger):
     raise ValueError(error_message)
 
 
-_MEAL_FOOD_CALORIE_REFERENCES = {
-    "arroz branco cozido": {
-        "per_100g": 130.0,
-        "aliases": ("arroz", "arroz branco", "rice"),
-    },
-    "feijao cozido": {
-        "per_100g": 76.0,
-        "aliases": ("feijao", "beans", "black beans"),
-    },
-    "frango grelhado": {
-        "per_100g": 165.0,
-        "aliases": ("frango", "peito de frango", "chicken"),
-    },
-    "carne bovina": {
-        "per_100g": 250.0,
-        "aliases": ("carne", "carne bovina", "bife", "beef"),
-    },
-    "ovo": {
-        "per_100g": 155.0,
-        "per_unit": 78.0,
-        "per_unit_grams": 50.0,
-        "aliases": ("ovo", "egg"),
-    },
-    "banana": {
-        "per_100g": 89.0,
-        "per_unit": 89.0,
-        "per_unit_grams": 100.0,
-        "aliases": ("banana",),
-    },
-    "maca": {
-        "per_100g": 52.0,
-        "per_unit": 95.0,
-        "per_unit_grams": 182.0,
-        "aliases": ("maca", "maça", "apple"),
-    },
-    "pao frances": {
-        "per_100g": 300.0,
-        "per_unit": 140.0,
-        "per_unit_grams": 50.0,
-        "aliases": ("pao", "pao frances", "bread", "french bread"),
-    },
-    "aveia": {
-        "per_100g": 389.0,
-        "aliases": ("aveia", "oats", "oatmeal"),
-    },
-    "leite integral": {
-        "per_100ml": 61.0,
-        "aliases": ("leite", "leite integral", "milk"),
-    },
-    "iogurte natural": {
-        "per_100g": 63.0,
-        "aliases": ("iogurte", "yogurt", "iogurte natural"),
-    },
-    "queijo muzzarella": {
-        "per_100g": 280.0,
-        "aliases": ("queijo", "mussarela", "muzzarella", "cheese"),
-    },
-    "batata cozida": {
-        "per_100g": 87.0,
-        "aliases": ("batata", "potato"),
-    },
-    "macarrao cozido": {
-        "per_100g": 158.0,
-        "aliases": ("macarrao", "massa", "pasta"),
-    },
-    "salada verde": {
-        "per_100g": 20.0,
-        "aliases": ("salada", "alface", "folhas"),
-    },
-    "whey protein": {
-        "per_unit": 120.0,
-        "per_unit_grams": 30.0,
-        "aliases": ("whey", "whey protein"),
-    },
-    "bacon": {
-        "per_100g": 541.0,
-        "aliases": ("bacon",),
-    },
-    "cafe sem acucar": {
-        "per_100ml": 2.0,
-        "aliases": ("cafe", "cafe preto", "coffee", "black coffee"),
-    },
-}
-
-
 _MEAL_UNIT_ALIASES = {
     "g": "g",
     "grama": "g",
@@ -688,26 +603,7 @@ def _parse_quantity_details(quantity):
     }
 
 
-def _resolve_reference_grams_per_unit(reference):
-    if not reference:
-        return None
-
-    explicit_grams = reference.get("per_unit_grams")
-    if explicit_grams is not None:
-        value = float(explicit_grams)
-        if value > 0:
-            return value
-
-    per_unit = reference.get("per_unit")
-    per_100g = reference.get("per_100g")
-    if per_unit is None or per_100g in (None, 0):
-        return None
-
-    inferred_grams = (float(per_unit) / float(per_100g)) * 100.0
-    return inferred_grams if inferred_grams > 0 else None
-
-
-def _convert_quantity_to_grams(food_name, quantity_details, reference=None):
+def _convert_quantity_to_grams(quantity_details):
     amount = float(quantity_details["amount"])
     unit = quantity_details["unit"]
 
@@ -715,22 +611,8 @@ def _convert_quantity_to_grams(food_name, quantity_details, reference=None):
         grams = amount
     elif unit == "kg":
         grams = amount * 1000.0
-    elif unit == "ml":
-        grams = amount
-    elif unit == "l":
-        grams = amount * 1000.0
-    elif unit == "cup":
-        grams = amount * 240.0
-    elif unit == "tbsp":
-        grams = amount * 15.0
-    elif unit == "tsp":
-        grams = amount * 5.0
     else:
-        reference_grams = _resolve_reference_grams_per_unit(reference)
-        if reference_grams is None:
-            _, detected_reference = _resolve_meal_food_reference(food_name)
-            reference_grams = _resolve_reference_grams_per_unit(detected_reference)
-        grams = amount * (reference_grams if reference_grams is not None else 100.0)
+        raise ValueError("quantity must be provided in grams (e.g., '150 g')")
 
     if grams <= 0:
         raise ValueError("quantity in grams must be greater than zero")
@@ -744,91 +626,6 @@ def _format_grams_quantity(amount_in_grams):
     else:
         display_value = f"{normalized:.2f}".rstrip("0").rstrip(".")
     return f"{display_value} g"
-
-
-def _resolve_meal_food_reference(food_name):
-    normalized_food = _normalize_text_for_lookup(food_name)
-    for canonical_name, reference in _MEAL_FOOD_CALORIE_REFERENCES.items():
-        canonical_terms = [_normalize_text_for_lookup(canonical_name)]
-        canonical_terms.extend(_normalize_text_for_lookup(alias) for alias in reference.get("aliases", ()))
-        if any(term and term in normalized_food for term in canonical_terms):
-            return canonical_name, reference
-    return None, None
-
-
-def _estimate_meal_calories(food_name, quantity):
-    clean_food_name = str(food_name or "").strip()
-    if not clean_food_name:
-        raise ValueError("food is required")
-    quantity_details = _parse_quantity_details(quantity)
-    unit = quantity_details["unit"]
-    amount = quantity_details["amount"]
-    canonical_name, reference = _resolve_meal_food_reference(clean_food_name)
-    estimated_calories = None
-    method = ""
-
-    if reference and unit in {"g", "kg"} and reference.get("per_100g") is not None:
-        amount_in_grams = amount * 1000.0 if unit == "kg" else amount
-        estimated_calories = (amount_in_grams / 100.0) * float(reference["per_100g"])
-        method = "per_100g"
-    elif reference and unit in {"ml", "l"} and reference.get("per_100ml") is not None:
-        amount_in_ml = amount * 1000.0 if unit == "l" else amount
-        estimated_calories = (amount_in_ml / 100.0) * float(reference["per_100ml"])
-        method = "per_100ml"
-    elif reference and unit in {"unit", "portion"} and reference.get("per_unit") is not None:
-        estimated_calories = amount * float(reference["per_unit"])
-        method = "per_unit"
-    elif reference and unit == "cup" and reference.get("per_100g") is not None:
-        estimated_calories = ((amount * 240.0) / 100.0) * float(reference["per_100g"])
-        method = "cup_assumed_240g"
-    elif reference and unit == "tbsp" and reference.get("per_100g") is not None:
-        estimated_calories = ((amount * 15.0) / 100.0) * float(reference["per_100g"])
-        method = "tbsp_assumed_15g"
-    elif reference and unit == "tsp" and reference.get("per_100g") is not None:
-        estimated_calories = ((amount * 5.0) / 100.0) * float(reference["per_100g"])
-        method = "tsp_assumed_5g"
-    elif reference and reference.get("per_unit") is not None:
-        estimated_calories = amount * float(reference["per_unit"])
-        method = "fallback_per_unit"
-    elif reference and reference.get("per_100g") is not None:
-        estimated_calories = amount * float(reference["per_100g"])
-        method = "fallback_assumed_100g_portion"
-    else:
-        normalized_food = _normalize_text_for_lookup(clean_food_name)
-        if unit in {"ml", "l"} and any(token in normalized_food for token in ("cafe", "coffee", "cha", "tea")):
-            amount_in_ml = amount * 1000.0 if unit == "l" else amount
-            estimated_calories = (amount_in_ml / 100.0) * 2.0
-            method = "fallback_beverage_no_sugar"
-        elif unit in {"g", "kg", "cup", "tbsp", "tsp"}:
-            amount_in_grams = amount * 1000.0 if unit == "kg" else amount
-            if unit == "cup":
-                amount_in_grams = amount * 240.0
-            elif unit == "tbsp":
-                amount_in_grams = amount * 15.0
-            elif unit == "tsp":
-                amount_in_grams = amount * 5.0
-            estimated_calories = (amount_in_grams / 100.0) * 250.0
-            method = "fallback_generic_solid_no_api"
-        elif unit in {"ml", "l"}:
-            amount_in_ml = amount * 1000.0 if unit == "l" else amount
-            estimated_calories = (amount_in_ml / 100.0) * 45.0
-            method = "fallback_generic_liquid_no_api"
-        else:
-            estimated_calories = amount * 120.0
-            method = "fallback_generic_unit_no_api"
-        canonical_name = canonical_name or "generic_estimation"
-
-    if estimated_calories is None:
-        raise ValueError("Unable to estimate calories with provided quantity")
-    quantity_in_grams = _convert_quantity_to_grams(clean_food_name, quantity_details, reference)
-    return {
-        "estimated_calories": round(float(estimated_calories), 2),
-        "method": method,
-        "food_reference": canonical_name,
-        "quantity_details": quantity_details,
-        "quantity_in_grams": quantity_in_grams,
-        "quantity_in_grams_text": _format_grams_quantity(quantity_in_grams),
-    }
 
 
 def _build_create_note_payload(note_data, tags_property_type, observations_property):
@@ -1769,27 +1566,22 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
         raise ValueError("quantity is required")
 
     quantity_details = _parse_quantity_details(quantity)
-    canonical_name, reference = _resolve_meal_food_reference(food_name)
-    quantity_in_grams = _convert_quantity_to_grams(food_name, quantity_details, reference)
+    quantity_in_grams = _convert_quantity_to_grams(quantity_details)
     quantity_in_grams_text = _format_grams_quantity(quantity_in_grams)
 
     estimated_calories_raw = meal_data.get("estimated_calories")
-    if estimated_calories_raw is not None:
-        estimated_calories = float(str(estimated_calories_raw).replace(",", "."))
-        if estimated_calories <= 0:
-            raise ValueError("estimated_calories must be greater than zero")
-        calorie_estimation = {
-            "estimated_calories": round(estimated_calories, 2),
-            "method": "llm_estimate",
-            "food_reference": canonical_name or "llm",
-            "quantity_details": quantity_details,
-            "quantity_in_grams": quantity_in_grams,
-            "quantity_in_grams_text": quantity_in_grams_text,
-        }
-    else:
-        calorie_estimation = _estimate_meal_calories(food_name, quantity)
-        quantity_in_grams = float(calorie_estimation["quantity_in_grams"])
-        quantity_in_grams_text = calorie_estimation["quantity_in_grams_text"]
+    if estimated_calories_raw is None:
+        raise ValueError("estimated_calories is required")
+    estimated_calories = float(str(estimated_calories_raw).replace(",", "."))
+    if estimated_calories <= 0:
+        raise ValueError("estimated_calories must be greater than zero")
+    calorie_estimation = {
+        "estimated_calories": round(estimated_calories, 2),
+        "method": "llm_estimate",
+        "quantity_details": quantity_details,
+        "quantity_in_grams": quantity_in_grams,
+        "quantity_in_grams_text": quantity_in_grams_text,
+    }
     estimated_calories = calorie_estimation["estimated_calories"]
 
     food_property, _ = _find_property_name(schema_properties, ("Alimento", "Food", "Nome", "Name"), {"title"})
@@ -1896,7 +1688,6 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
             "date": meal_date,
             "calories": estimated_calories,
             "calorie_estimation_method": calorie_estimation["method"],
-            "food_reference": calorie_estimation["food_reference"],
         }
 
     if last_error is not None:

@@ -36,10 +36,50 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("read_email", agent.tools)
         self.assertIn("search_email_attachments", agent.tools)
         self.assertIn("analyze_email_attachment", agent.tools)
-        self.assertIn("orientações incisivas e diretas", agent.system_prompt)
-        self.assertIn("convertendo a quantidade para gramas", agent.system_prompt)
-        self.assertIn("done=false para atividades futuras", agent.system_prompt)
-        self.assertIn("parâmetro date", agent.system_prompt)
+        self.assertIn("Preserve fidelidade ao pedido do usuário", agent.system_prompt)
+        self.assertNotIn("orientações incisivas e diretas", agent.system_prompt)
+        self.assertIn(
+            "orientações incisivas e diretas",
+            configuration.tools["analyze_notion_meals"].prompt_guidance,
+        )
+        self.assertIn(
+            "convertida para gramas",
+            configuration.tools["register_notion_meal"].prompt_guidance,
+        )
+        self.assertIn(
+            "done=false ao planejar atividades futuras",
+            configuration.tools["register_notion_exercise"].prompt_guidance,
+        )
+        self.assertIn(
+            "parâmetro date",
+            configuration.tools["analyze_monthly_expenses"].prompt_guidance,
+        )
+
+    def test_load_configuration_reads_prompt_guidance_and_priority(self):
+        config = {
+            "tools": [
+                {
+                    "name": "tool_a",
+                    "description": "d",
+                    "handler": "assistant_connector.tools.meta_tools:list_available_tools",
+                    "prompt_guidance": "Use esta tool para listar recursos.",
+                    "guidance_priority": 5,
+                }
+            ],
+            "agents": [
+                {"id": "agent_a", "description": "a", "system_prompt": "p", "tools": ["tool_a"]}
+            ],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=True, encoding="utf-8") as temp_config:
+            json.dump(config, temp_config)
+            temp_config.flush()
+            loaded = load_assistant_configuration(temp_config.name)
+
+        self.assertEqual(
+            loaded.tools["tool_a"].prompt_guidance,
+            "Use esta tool para listar recursos.",
+        )
+        self.assertEqual(loaded.tools["tool_a"].guidance_priority, 5)
 
     def test_write_tools_flagged_as_write_operations(self):
         configuration = load_assistant_configuration()

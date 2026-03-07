@@ -34,6 +34,8 @@ class ToolRegistry:
                 "description": tool.description,
                 "write_operation": tool.write_operation,
                 "input_schema": tool.input_schema,
+                "prompt_guidance": tool.prompt_guidance,
+                "guidance_priority": tool.guidance_priority,
             }
             for tool in self._resolve_tools(tool_names)
         ]

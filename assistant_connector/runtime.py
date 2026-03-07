@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from assistant_connector.memory_store import ConversationMemoryStore
 from assistant_connector.models import AgentDefinition, ToolExecutionContext
 from assistant_connector.tool_registry import ToolRegistry
+from utils.timezone_utils import build_time_context
 
 BLOCKED_SCHEDULED_EXECUTION_TOOLS = {
     "create_scheduled_task",
@@ -85,7 +86,7 @@ class AssistantRuntime:
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(
             model=self._agent.model,
-            input=self._build_input_messages(history, available_tools, clean_message),
+            input=self._build_input_messages(history, clean_message),
             tools=openai_tools,
         )
 
@@ -125,10 +126,15 @@ class AssistantRuntime:
                     }
                 )
 
+            next_input = list(tool_outputs)
+            dynamic_guidance_message = self._build_dynamic_tool_guidance_message(function_calls)
+            if dynamic_guidance_message is not None:
+                next_input.append(dynamic_guidance_message)
+
             response = self._openai_client.responses.create(
                 model=self._agent.model,
                 previous_response_id=self._item_get(response, "id"),
-                input=tool_outputs,
+                input=next_input,
                 tools=openai_tools,
             )
 
@@ -145,24 +151,19 @@ class AssistantRuntime:
     def _build_input_messages(
         self,
         history: list[dict[str, str]],
-        available_tools: list[dict[str, Any]],
         user_message: str,
     ) -> list[dict[str, str]]:
-        tools_lines = "\n".join(
-            f"- {tool['name']}: {tool['description']}" for tool in available_tools
-        )
         system_message = (
             f"{self._agent.system_prompt}\n\n"
-            "Ferramentas atualmente habilitadas:\n"
-            f"{tools_lines}\n\n"
-            "Se o usuário perguntar quais tools existem, responda com os nomes das tools.\n\n"
+            "Se o usuário perguntar quais tools existem, use list_available_tools para listar nomes e finalidade.\n\n"
             "Formato obrigatório para resposta no Discord:\n"
             "- Sempre responda em Markdown.\n"
             "- Use título H2 no início (## ...).\n"
             "- Use listas para itens múltiplos e destaque com negrito quando útil.\n"
             "- Mire em respostas com até 1500 caracteres e, sempre que possível, não ultrapasse 1800.\n"
             "- Nunca responda em JSON bruto.\n\n"
-            f"{self._build_email_style_guidance()}"
+            f"{self._build_email_style_guidance()}\n\n"
+            f"{self._build_time_context_guidance()}"
         )
         if self._agent_memory_text:
             system_message = (
@@ -215,6 +216,51 @@ class AssistantRuntime:
             for _, file_name, content in selected
         ]
         return self._truncate_text("\n\n".join(chunks), self._max_user_memory_chars)
+
+    def _build_dynamic_tool_guidance_message(self, function_calls: list[dict[str, str]]) -> dict[str, str] | None:
+        seen_tool_names = set()
+        guidance_entries: list[tuple[int, str, str]] = []
+        for function_call in function_calls:
+            tool_name = str(function_call.get("name", "")).strip()
+            if not tool_name or tool_name in seen_tool_names:
+                continue
+            seen_tool_names.add(tool_name)
+            try:
+                tool_definition = self._tool_registry.get_tool_definition(tool_name)
+            except ValueError:
+                continue
+            guidance = str(tool_definition.prompt_guidance or "").strip()
+            if not guidance:
+                continue
+            guidance_entries.append(
+                (
+                    int(tool_definition.guidance_priority),
+                    tool_name,
+                    guidance,
+                )
+            )
+        if not guidance_entries:
+            return None
+
+        guidance_entries.sort(key=lambda item: (item[0], item[1]))
+        content_blocks = [
+            "Contexto adicional das ferramentas usadas neste turno (aplique somente se relevante):"
+        ]
+        for _, tool_name, guidance in guidance_entries:
+            content_blocks.append(f"### {tool_name}\n{guidance}")
+        return {"role": "system", "content": "\n\n".join(content_blocks)}
+
+    @staticmethod
+    def _build_time_context_guidance() -> str:
+        time_context = build_time_context()
+        return (
+            "Contexto temporal operacional:\n"
+            f"- Timezone operacional: {time_context['timezone_name']} (UTC offset {time_context['local_utc_offset']})\n"
+            f"- Data local atual: {time_context['local_date_iso']}\n"
+            f"- Horário local atual (ISO-8601): {time_context['local_now_iso']}\n"
+            f"- Horário UTC atual (ISO-8601): {time_context['utc_now_iso']}\n"
+            "- Regra: interprete termos relativos de tempo (hoje, amanhã, agora, esta semana) sempre no timezone operacional."
+        )
 
     def _execute_tool_call(
         self,

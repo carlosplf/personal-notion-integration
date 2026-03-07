@@ -278,31 +278,15 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(expenses[0]["category"], "Transporte")
         self.assertEqual(expenses[0]["description"], "Uber ida")
 
-    def test_estimate_meal_calories_uses_known_reference(self):
-        estimation = notion_connector._estimate_meal_calories("Arroz branco", "150 g")
-        self.assertEqual(estimation["food_reference"], "arroz branco cozido")
-        self.assertEqual(estimation["estimated_calories"], 195.0)
-
-    def test_estimate_meal_calories_uses_local_fallback_for_unknown_food(self):
-        estimation = notion_connector._estimate_meal_calories("Comida caseira", "100 g")
-        self.assertGreater(estimation["estimated_calories"], 0)
-        self.assertEqual(estimation["food_reference"], "generic_estimation")
-
-    def test_estimate_meal_calories_supports_bacon_and_unsweetened_coffee(self):
-        bacon = notion_connector._estimate_meal_calories("Bacon", "50 g")
-        coffee = notion_connector._estimate_meal_calories("Café sem açúcar", "150 ml")
-        self.assertEqual(bacon["estimated_calories"], 270.5)
-        self.assertEqual(coffee["estimated_calories"], 3.0)
-
-    def test_estimate_meal_calories_converts_unit_quantity_to_grams(self):
-        estimation = notion_connector._estimate_meal_calories("Ovo mexido", "3 ovos")
-        self.assertEqual(estimation["quantity_in_grams"], 150.0)
-        self.assertEqual(estimation["quantity_in_grams_text"], "150 g")
+    def test_convert_quantity_to_grams_requires_gram_units(self):
+        details = notion_connector._parse_quantity_details("3 ovos")
+        with self.assertRaises(ValueError):
+            notion_connector._convert_quantity_to_grams(details)
 
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
-    def test_create_meal_in_meals_db_calculates_and_persists_calories(self, mock_load_credentials, mock_post, mock_get):
+    def test_create_meal_in_meals_db_requires_llm_calories_and_persists_in_grams(self, mock_load_credentials, mock_post, mock_get):
         mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
         mock_get.return_value = _MockResponse(
             {
@@ -323,12 +307,14 @@ class TestNotionConnector(unittest.TestCase):
                     "food": "Arroz branco",
                     "meal_type": "Almoço",
                     "quantity": "150 g",
+                    "estimated_calories": 195,
                 },
                 project_logger=_MockLogger(),
             )
 
         self.assertEqual(result["id"], "meal-1")
         self.assertEqual(result["calories"], 195.0)
+        self.assertEqual(result["calorie_estimation_method"], "llm_estimate")
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["parent"]["database_id"], "meals-db-id")
         self.assertEqual(payload["properties"]["Alimento"]["title"][0]["text"]["content"], "Arroz branco")
@@ -360,7 +346,7 @@ class TestNotionConnector(unittest.TestCase):
                 {
                     "food": "Alimento livre",
                     "meal_type": "Lanche",
-                    "quantity": "1 porção",
+                    "quantity": "100 g",
                     "date": "2026-04-12",
                     "estimated_calories": 230,
                 },
@@ -375,6 +361,69 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(payload["properties"]["Quantidade"]["rich_text"][0]["text"]["content"], "100 g")
         self.assertEqual(payload["properties"]["Calorias"]["number"], 230.0)
         self.assertEqual(payload["properties"]["Data"]["date"]["start"], "2026-04-12")
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_meal_in_meals_db_rejects_non_gram_units(
+        self, mock_load_credentials, mock_post, mock_get
+    ):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Alimento": {"type": "title"},
+                    "Refeição": {"type": "select"},
+                    "Data": {"type": "date"},
+                    "Quantidade": {"type": "number"},
+                    "Calorias": {"type": "number"},
+                }
+            }
+        )
+        mock_post.return_value = _MockResponse({"id": "meal-3", "url": "https://notion.so/meal-3"})
+
+        with patch.dict("os.environ", {"NOTION_MEALS_DB_ID": "meals-db-id"}, clear=False):
+            with self.assertRaises(ValueError):
+                notion_connector.create_meal_in_meals_db(
+                    {
+                        "food": "Ovo mexido",
+                        "meal_type": "Café da manhã",
+                        "quantity": "3 ovos",
+                        "estimated_calories": 230,
+                    },
+                    project_logger=_MockLogger(),
+                )
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_meal_in_meals_db_requires_estimated_calories(
+        self, mock_load_credentials, mock_post, mock_get
+    ):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Alimento": {"type": "title"},
+                    "Refeição": {"type": "select"},
+                    "Data": {"type": "date"},
+                    "Quantidade": {"type": "number"},
+                    "Calorias": {"type": "number"},
+                }
+            }
+        )
+        mock_post.return_value = _MockResponse({"id": "meal-4", "url": "https://notion.so/meal-4"})
+
+        with patch.dict("os.environ", {"NOTION_MEALS_DB_ID": "meals-db-id"}, clear=False):
+            with self.assertRaises(ValueError):
+                notion_connector.create_meal_in_meals_db(
+                    {
+                        "food": "Frango grelhado",
+                        "meal_type": "Almoço",
+                        "quantity": "180 g",
+                    },
+                    project_logger=_MockLogger(),
+                )
 
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
@@ -399,18 +448,19 @@ class TestNotionConnector(unittest.TestCase):
         with patch.dict("os.environ", {"NOTION_MEALS_DB_ID": "meals-db-id"}, clear=False):
             result = notion_connector.create_meal_in_meals_db(
                 {
-                    "food": "Ovo mexido",
+                    "food": "Frango grelhado",
                     "meal_type": "Café da manhã",
-                    "quantity": "3 ovos",
+                    "quantity": "180 g",
+                    "estimated_calories": 297,
                 },
                 project_logger=_MockLogger(),
             )
 
         self.assertEqual(result["id"], "meal-3")
-        self.assertEqual(result["quantity"], "150 g")
-        self.assertEqual(result["quantity_grams"], 150.0)
+        self.assertEqual(result["quantity"], "180 g")
+        self.assertEqual(result["quantity_grams"], 180.0)
         payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["properties"]["Quantidade"]["number"], 150.0)
+        self.assertEqual(payload["properties"]["Quantidade"]["number"], 180.0)
 
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")

@@ -244,7 +244,7 @@ class TestAssistantTools(unittest.TestCase):
             "quantity": "150 g",
             "date": "2026-03-10",
             "calories": 195.0,
-            "calorie_estimation_method": "per_100g",
+            "calorie_estimation_method": "llm_estimate",
         }
 
         result = notion_tools.register_notion_meal(
@@ -274,6 +274,11 @@ class TestAssistantTools(unittest.TestCase):
             notion_tools.register_notion_meal({"alimento": "Frango", "quantidade": "100 g"}, _build_context())
         with self.assertRaises(ValueError):
             notion_tools.register_notion_meal({"alimento": "Frango", "refeicao": "ALMOÇO"}, _build_context())
+        with self.assertRaises(ValueError):
+            notion_tools.register_notion_meal(
+                {"alimento": "Frango", "refeicao": "ALMOÇO", "quantidade": "100 g"},
+                _build_context(),
+            )
         with self.assertRaises(ValueError):
             notion_tools.register_notion_meal(
                 {"alimento": "Frango", "refeicao": "CEIA", "quantidade": "100 g"},

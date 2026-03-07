@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _DEFAULT_TIMEZONE_NAME = "UTC"
 _OFFSET_PATTERN = re.compile(r"^(UTC|GMT)\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+_LOGGER = logging.getLogger(__name__)
+_WARNED_INVALID_TIMEZONES: set[str] = set()
 
 
 def _parse_utc_gmt_offset(raw_value: str):
@@ -40,6 +43,12 @@ def _resolve_configured_timezone():
     if parsed_offset is not None:
         return parsed_offset
 
+    if raw_timezone not in _WARNED_INVALID_TIMEZONES:
+        _WARNED_INVALID_TIMEZONES.add(raw_timezone)
+        _LOGGER.warning(
+            "Invalid TIMEZONE value '%s'. Falling back to UTC.",
+            raw_timezone,
+        )
     return _DEFAULT_TIMEZONE_NAME, datetime.timezone.utc
 
 
@@ -63,3 +72,23 @@ def today_in_configured_timezone() -> datetime.date:
 
 def today_iso_in_configured_timezone() -> str:
     return today_in_configured_timezone().isoformat()
+
+
+def build_time_context() -> dict[str, str]:
+    timezone_name, configured_timezone = _resolve_configured_timezone()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_local = now_utc.astimezone(configured_timezone)
+    offset = now_local.utcoffset() or datetime.timedelta()
+    total_minutes = int(offset.total_seconds() // 60)
+    signal = "+" if total_minutes >= 0 else "-"
+    absolute_minutes = abs(total_minutes)
+    offset_hours, offset_minutes = divmod(absolute_minutes, 60)
+    offset_label = f"{signal}{offset_hours:02d}:{offset_minutes:02d}"
+    return {
+        "timezone_name": timezone_name,
+        "local_now_iso": now_local.replace(microsecond=0).isoformat(),
+        "local_date_iso": now_local.date().isoformat(),
+        "local_utc_offset": offset_label,
+        "utc_now_iso": now_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "utc_date_iso": now_utc.date().isoformat(),
+    }

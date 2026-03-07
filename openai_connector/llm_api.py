@@ -1,11 +1,17 @@
 import os
 import datetime
 import json
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import openai
 from dotenv import load_dotenv
 
-from utils.timezone_utils import today_in_configured_timezone, today_iso_in_configured_timezone
+from utils.timezone_utils import (
+    build_time_context,
+    get_configured_timezone_name,
+    today_in_configured_timezone,
+    today_iso_in_configured_timezone,
+)
 
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
@@ -130,7 +136,11 @@ def parse_add_task_input(user_input, project_logger):
     project_logger.info("Calling LLM to parse add_task input...")
     completion = openai_client.responses.create(
         model=llm_model,
-        input=f"{TASK_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
+        input=(
+            f"{TASK_PARSER_PROMPT}\n\n"
+            f"{_build_temporal_prompt_context()}\n\n"
+            f"Input do usuário:\n{user_input}"
+        ),
     )
     return parse_add_task_output(completion.output_text)
 
@@ -153,11 +163,18 @@ def summarize_calendar_events(events, project_logger):
 def parse_add_event_input(user_input, project_logger):
     openai_client = _create_openai_client()
     llm_model = _get_llm_model()
+    default_timezone = _get_default_event_timezone()
 
     project_logger.info("Calling LLM to parse add_event input...")
     completion = openai_client.responses.create(
         model=llm_model,
-        input=f"{EVENT_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
+        input=(
+            f"{EVENT_PARSER_PROMPT}\n"
+            f"\nDefault timezone para este usuário: {default_timezone}."
+            f"\nSe timezone não for informado pelo usuário, use exatamente {default_timezone}.\n\n"
+            f"{_build_temporal_prompt_context()}\n\n"
+            f"Input do usuário:\n{user_input}"
+        ),
     )
     return parse_add_event_output(completion.output_text)
 
@@ -251,7 +268,8 @@ def parse_add_event_output(output_text):
     start_datetime = str(payload.get("start_datetime", "")).strip()
     end_datetime = str(payload.get("end_datetime", "")).strip()
     description = str(payload.get("description", "")).strip()
-    timezone = str(payload.get("timezone", "America/Sao_Paulo")).strip() or "America/Sao_Paulo"
+    default_timezone = _get_default_event_timezone()
+    timezone = str(payload.get("timezone", default_timezone)).strip() or default_timezone
 
     if not summary:
         raise ValueError("LLM did not provide summary")
@@ -388,6 +406,7 @@ def build_period_summary_prompt(period_label, tasks, events):
     empty_message = _build_empty_period_message(period_key)
     section_tasks = _build_period_task_section_title(period_key)
     section_events = _build_period_event_section_title(period_key)
+    temporal_context = _build_temporal_prompt_context()
 
     if _is_week_period(period_key):
         prompt_header = (
@@ -406,6 +425,7 @@ def build_period_summary_prompt(period_label, tasks, events):
             "\n- Não liste todas as tarefas ou eventos individualmente; sintetize os principais pontos."
             f"\n- Se não houver tarefas e nem eventos para {empty_target}, responda exatamente:"
             f"\n\"{empty_message.replace(chr(10), '\\\\n')}\""
+            f"\n\n{temporal_context}"
         )
     else:
         prompt_header = (
@@ -423,6 +443,7 @@ def build_period_summary_prompt(period_label, tasks, events):
             "\n- Não responder em JSON."
             f"\n- Se não houver tarefas e nem eventos para {empty_target}, responda exatamente:"
             f"\n\"{empty_message.replace(chr(10), '\\\\n')}\""
+            f"\n\n{temporal_context}"
         )
 
     task_lines = "".join(
@@ -480,6 +501,26 @@ def _build_period_event_section_title(period_key):
 
 def _is_week_period(period_key):
     return period_key in ("semana", "semana atual", "week")
+
+
+def _get_default_event_timezone():
+    configured_timezone = get_configured_timezone_name()
+    try:
+        ZoneInfo(configured_timezone)
+        return configured_timezone
+    except ZoneInfoNotFoundError:
+        return "America/Sao_Paulo"
+
+
+def _build_temporal_prompt_context():
+    time_context = build_time_context()
+    return (
+        "Contexto temporal operacional do usuário:\n"
+        f"- Timezone: {time_context['timezone_name']} (UTC offset {time_context['local_utc_offset']})\n"
+        f"- Data local atual: {time_context['local_date_iso']}\n"
+        f"- Horário local atual: {time_context['local_now_iso']}\n"
+        "- Regra: interprete termos relativos de tempo (hoje, amanhã, agora, esta semana) usando este timezone."
+    )
 
 
 def build_message(tasks):

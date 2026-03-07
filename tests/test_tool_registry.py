@@ -57,6 +57,24 @@ class TestToolRegistry(unittest.TestCase):
         self.assertEqual(payload[0]["type"], "function")
         self.assertEqual(payload[0]["name"], "tool_a")
 
+    def test_describe_tools_includes_prompt_guidance(self):
+        registry = ToolRegistry(
+            {
+                "tool_a": ToolDefinition(
+                    name="tool_a",
+                    description="desc",
+                    input_schema={"type": "object", "properties": {}},
+                    handler="tests.test_tool_registry:_dict_handler",
+                    prompt_guidance="Use esta tool somente para dados públicos.",
+                    guidance_priority=7,
+                )
+            }
+        )
+
+        payload = registry.describe_tools(["tool_a"])
+        self.assertEqual(payload[0]["prompt_guidance"], "Use esta tool somente para dados públicos.")
+        self.assertEqual(payload[0]["guidance_priority"], 7)
+
     def test_unknown_tool_raises(self):
         registry = ToolRegistry({})
         with self.assertRaises(ValueError):
