@@ -2,6 +2,7 @@ import unittest
 import unittest.mock
 import tempfile
 import os
+import datetime
 import sys
 import types
 
@@ -86,6 +87,17 @@ class TestOpenAIConnector(unittest.TestCase):
         output = '{"task_name":"Enviar proposta","project":"Draiven","due_date":"2026-03-05","tags":["amanhã","manhã","FAST"]}'
         parsed = llm_api.parse_add_task_output(output)
         self.assertEqual(parsed["tags"], ["FAST"])
+
+    def test_parse_add_task_output_defaults_due_date_from_configured_timezone(self):
+        output = '{"task_name":"Enviar proposta","project":"Draiven","tags":["FAST"]}'
+        with unittest.mock.patch.object(llm_api, "today_iso_in_configured_timezone", return_value="2026-03-01"):
+            parsed = llm_api.parse_add_task_output(output)
+        self.assertEqual(parsed["due_date"], "2026-03-01")
+
+    def test_build_overdue_label_uses_configured_today(self):
+        with unittest.mock.patch.object(llm_api, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 2)):
+            self.assertEqual(llm_api._build_overdue_label("2026-03-01"), "ATRASADA")
+            self.assertEqual(llm_api._build_overdue_label("2026-03-02"), "NO PRAZO")
 
     def test_build_calendar_events_prompt_contains_events(self):
         prompt = llm_api.build_calendar_events_prompt(

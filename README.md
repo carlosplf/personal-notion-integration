@@ -67,7 +67,7 @@ Create a `.env` at project root:
 NOTION_DATABASE_ID="8be..."
 NOTION_NOTES_DB_ID="9af..."             # Notion database ID for notes (/note and /notes)
 NOTION_EXPENSES_DB_ID="7cd..."          # Notion expenses DB (Nome, Data, Categoria, Descrição, Valor)
-NOTION_MEALS_DB_ID="5ab..."             # Notion meals DB (Alimento, Refeição, Quantidade, Calorias)
+NOTION_MEALS_DB_ID="5ab..."             # Notion meals DB (Alimento, Refeição, Quantidade em gramas, Calorias)
 NOTION_EXERCISES_DB_ID="6de..."         # Notion exercises DB (Data, Atividade, Calorias, Observações, Done)
 NOTION_API_KEY="secret_x0l..."
 OPENAI_KEY="sk-..."
@@ -131,7 +131,7 @@ python run.py
 - You can chat directly in DM without slash commands; every DM message is processed in the same assistant flow as `/bot` and `/pa`.
 - In DM, you can send `/reset` (or `/new_chat`) as plain text to clear the conversation history for that DM chat.
 - DM audio attachments are transcribed and processed by the same assistant flow.
-- In conversational mode, the assistant can use tools for Notion tasks/notes/meals/exercises (`register_notion_meal`, `analyze_notion_meals`, `register_notion_exercise`, `edit_notion_exercise`, `analyze_notion_exercises`) and should use `done=false` to plan future workouts and `done=true` when marking completed activities; it can also use calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
+- In conversational mode, the assistant can use tools for Notion tasks/notes/meals/exercises (`register_notion_meal`, `analyze_notion_meals`, `register_notion_exercise`, `edit_notion_exercise`, `analyze_notion_exercises`) and should use `done=false` to plan future workouts and `done=true` when marking completed activities; meal registration normalizes quantity to grams in Notion (e.g., `3 ovos` -> `~150 g`); it can also use calendar, scheduled tasks in SQLite, app health (`get_application_hardware_status`), email sending (with explicit confirmation for write actions), email reading/search (`search_emails`, `read_email`, `search_email_attachments`, `analyze_email_attachment`), tech news (`list_tech_news`), and contact search from `memories/contacts.csv` (`search_contacts`).
 - For expense analysis, `analyze_monthly_expenses` supports `date` (YYYY-MM-DD) to isolate and detail one specific day (e.g., today).
 
 ## Run as Ubuntu service (systemd)

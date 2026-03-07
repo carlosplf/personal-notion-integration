@@ -4,6 +4,7 @@ import datetime
 import re
 
 from notion_connector import notion_connector
+from utils.timezone_utils import today_in_configured_timezone, today_iso_in_configured_timezone
 
 _CATEGORY_KEYWORDS = {
     "Alimentação": ("mercado", "restaurante", "ifood", "lanche", "almoço", "jantar", "cafe"),
@@ -170,7 +171,7 @@ def create_notion_task(arguments, context):
         raise ValueError("task_name is required")
 
     project = str(arguments.get("project", "Pessoal")).strip() or "Pessoal"
-    due_date = str(arguments.get("due_date", datetime.date.today().isoformat())).strip()
+    due_date = str(arguments.get("due_date", today_iso_in_configured_timezone())).strip()
     datetime.date.fromisoformat(due_date)
 
     tags = arguments.get("tags", [])
@@ -299,7 +300,7 @@ def register_financial_expense(arguments, context):
     if amount <= 0:
         raise ValueError("amount must be greater than zero")
 
-    expense_date_raw = str(arguments.get("expense_date", datetime.date.today().isoformat())).strip()
+    expense_date_raw = str(arguments.get("expense_date", today_iso_in_configured_timezone())).strip()
     expense_date = datetime.date.fromisoformat(expense_date_raw)
     category = _normalize_expense_category(arguments.get("category"), description)
     create_result = notion_connector.create_expense_in_expenses_db(
@@ -328,7 +329,7 @@ def register_notion_meal(arguments, context):
     food = str(arguments.get("alimento", arguments.get("food", ""))).strip()
     meal_type = _normalize_meal_category(arguments.get("refeicao", arguments.get("meal_type", "")))
     quantity = str(arguments.get("quantidade", arguments.get("quantity", ""))).strip()
-    meal_date = str(arguments.get("data", arguments.get("date", datetime.date.today().isoformat()))).strip()
+    meal_date = str(arguments.get("data", arguments.get("date", today_iso_in_configured_timezone()))).strip()
     estimated_calories = arguments.get("calorias_estimadas", arguments.get("estimated_calories"))
     if not food:
         raise ValueError("alimento is required")
@@ -355,12 +356,12 @@ def register_notion_meal(arguments, context):
 def register_notion_exercise(arguments, context):
     activity = str(arguments.get("atividade", arguments.get("activity", ""))).strip()
     raw_calories = arguments.get("calorias", arguments.get("calories"))
-    exercise_date = str(arguments.get("data", arguments.get("date", datetime.date.today().isoformat()))).strip()
+    exercise_date = str(arguments.get("data", arguments.get("date", today_iso_in_configured_timezone()))).strip()
     exercise_date_value = datetime.date.fromisoformat(exercise_date)
     observations = str(arguments.get("observacoes", arguments.get("observations", ""))).strip()
     done = _read_optional_boolean(arguments, "done", "concluido", "concluído")
     if done is None:
-        done = exercise_date_value <= datetime.date.today()
+        done = exercise_date_value <= today_in_configured_timezone()
 
     if not activity:
         raise ValueError("atividade is required")
@@ -429,7 +430,7 @@ def analyze_notion_exercises(arguments, context):
     else:
         include_meals = bool(include_meals_arg)
 
-    today = datetime.date.today()
+    today = today_in_configured_timezone()
     start_date = today - datetime.timedelta(days=days_back)
     end_date = today + datetime.timedelta(days=days_forward)
     start_datetime = f"{start_date.isoformat()}T00:00:00Z"
@@ -531,7 +532,7 @@ def analyze_notion_meals(arguments, context):
     limit = int(arguments.get("limit", 100))
     limit = min(max(limit, 1), 300)
 
-    today = datetime.date.today()
+    today = today_in_configured_timezone()
     start_date = today - datetime.timedelta(days=days_back)
     end_date = today + datetime.timedelta(days=days_forward)
     start_datetime = f"{start_date.isoformat()}T00:00:00Z"
@@ -675,7 +676,7 @@ def analyze_monthly_expenses(arguments, context):
     elif target_day is not None:
         target_date = target_day.replace(day=1)
     else:
-        target_date = datetime.date.today().replace(day=1)
+        target_date = today_in_configured_timezone().replace(day=1)
     if target_day is not None and target_day.strftime("%Y-%m") != target_date.strftime("%Y-%m"):
         raise ValueError("date must belong to the requested month")
     month_key = target_date.strftime("%Y-%m")
@@ -789,7 +790,7 @@ def list_unpaid_monthly_bills(arguments, context):
             raise ValueError("month must follow YYYY-MM")
         target_date = datetime.date.fromisoformat(f"{month_value}-01")
     else:
-        target_date = datetime.date.today().replace(day=1)
+        target_date = today_in_configured_timezone().replace(day=1)
     limit = int(arguments.get("limit", 30))
     limit = min(max(limit, 1), 100)
 
@@ -847,7 +848,7 @@ def analyze_monthly_bills(arguments, context):
             raise ValueError("month must follow YYYY-MM")
         target_date = datetime.date.fromisoformat(f"{month_value}-01")
     else:
-        target_date = datetime.date.today().replace(day=1)
+        target_date = today_in_configured_timezone().replace(day=1)
 
     month_start, month_end = _month_bounds(target_date)
     bills = notion_connector.collect_monthly_bills_from_database(

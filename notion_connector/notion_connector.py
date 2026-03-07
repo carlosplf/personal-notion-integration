@@ -5,6 +5,11 @@ import re
 import requests
 
 from utils import load_credentials
+from utils.timezone_utils import (
+    get_configured_timezone,
+    today_in_configured_timezone,
+    today_iso_in_configured_timezone,
+)
 
 
 def collect_tasks_from_control_panel(n_days=0, project_logger=None):
@@ -14,11 +19,12 @@ def collect_tasks_from_control_panel(n_days=0, project_logger=None):
     """
     project_logger = project_logger or logging.getLogger(__name__)
     notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
-    today = datetime.datetime.now().date()
+    today = today_in_configured_timezone()
     cutoff_day = today + datetime.timedelta(days=max(n_days, 0) + 1)
     cutoff_datetime = datetime.datetime.combine(
         cutoff_day,
         datetime.time.min,
+        tzinfo=get_configured_timezone(),
     ).isoformat()
 
     query_candidates = [
@@ -492,21 +498,25 @@ _MEAL_FOOD_CALORIE_REFERENCES = {
     "ovo": {
         "per_100g": 155.0,
         "per_unit": 78.0,
+        "per_unit_grams": 50.0,
         "aliases": ("ovo", "egg"),
     },
     "banana": {
         "per_100g": 89.0,
         "per_unit": 89.0,
+        "per_unit_grams": 100.0,
         "aliases": ("banana",),
     },
     "maca": {
         "per_100g": 52.0,
         "per_unit": 95.0,
+        "per_unit_grams": 182.0,
         "aliases": ("maca", "maça", "apple"),
     },
     "pao frances": {
         "per_100g": 300.0,
         "per_unit": 140.0,
+        "per_unit_grams": 50.0,
         "aliases": ("pao", "pao frances", "bread", "french bread"),
     },
     "aveia": {
@@ -539,6 +549,7 @@ _MEAL_FOOD_CALORIE_REFERENCES = {
     },
     "whey protein": {
         "per_unit": 120.0,
+        "per_unit_grams": 30.0,
         "aliases": ("whey", "whey protein"),
     },
     "bacon": {
@@ -677,6 +688,64 @@ def _parse_quantity_details(quantity):
     }
 
 
+def _resolve_reference_grams_per_unit(reference):
+    if not reference:
+        return None
+
+    explicit_grams = reference.get("per_unit_grams")
+    if explicit_grams is not None:
+        value = float(explicit_grams)
+        if value > 0:
+            return value
+
+    per_unit = reference.get("per_unit")
+    per_100g = reference.get("per_100g")
+    if per_unit is None or per_100g in (None, 0):
+        return None
+
+    inferred_grams = (float(per_unit) / float(per_100g)) * 100.0
+    return inferred_grams if inferred_grams > 0 else None
+
+
+def _convert_quantity_to_grams(food_name, quantity_details, reference=None):
+    amount = float(quantity_details["amount"])
+    unit = quantity_details["unit"]
+
+    if unit == "g":
+        grams = amount
+    elif unit == "kg":
+        grams = amount * 1000.0
+    elif unit == "ml":
+        grams = amount
+    elif unit == "l":
+        grams = amount * 1000.0
+    elif unit == "cup":
+        grams = amount * 240.0
+    elif unit == "tbsp":
+        grams = amount * 15.0
+    elif unit == "tsp":
+        grams = amount * 5.0
+    else:
+        reference_grams = _resolve_reference_grams_per_unit(reference)
+        if reference_grams is None:
+            _, detected_reference = _resolve_meal_food_reference(food_name)
+            reference_grams = _resolve_reference_grams_per_unit(detected_reference)
+        grams = amount * (reference_grams if reference_grams is not None else 100.0)
+
+    if grams <= 0:
+        raise ValueError("quantity in grams must be greater than zero")
+    return round(grams, 2)
+
+
+def _format_grams_quantity(amount_in_grams):
+    normalized = round(float(amount_in_grams), 2)
+    if normalized.is_integer():
+        display_value = str(int(normalized))
+    else:
+        display_value = f"{normalized:.2f}".rstrip("0").rstrip(".")
+    return f"{display_value} g"
+
+
 def _resolve_meal_food_reference(food_name):
     normalized_food = _normalize_text_for_lookup(food_name)
     for canonical_name, reference in _MEAL_FOOD_CALORIE_REFERENCES.items():
@@ -751,11 +820,14 @@ def _estimate_meal_calories(food_name, quantity):
 
     if estimated_calories is None:
         raise ValueError("Unable to estimate calories with provided quantity")
+    quantity_in_grams = _convert_quantity_to_grams(clean_food_name, quantity_details, reference)
     return {
         "estimated_calories": round(float(estimated_calories), 2),
         "method": method,
         "food_reference": canonical_name,
         "quantity_details": quantity_details,
+        "quantity_in_grams": quantity_in_grams,
+        "quantity_in_grams_text": _format_grams_quantity(quantity_in_grams),
     }
 
 
@@ -1041,7 +1113,7 @@ def create_note_in_notes_db(note_data, project_logger=None):
         "database_id": notes_database_id,
         "note_name": note_name,
         "tag": str(note_data.get("tag", "GENERAL")).strip() or "GENERAL",
-        "date": str(note_data.get("date", datetime.date.today().isoformat())).strip(),
+        "date": str(note_data.get("date", today_iso_in_configured_timezone())).strip(),
         "observations": str(note_data.get("observations", "")).strip(),
         "url": str(note_data.get("url", "")).strip() or None,
     }
@@ -1206,7 +1278,7 @@ def collect_notes_around_today(days_back=5, days_forward=5, project_logger=None)
     notion_credentials = load_credentials.load_notion_credentials(project_logger=project_logger)
     notes_database_id = _get_notes_database_id(project_logger)
 
-    today = datetime.date.today()
+    today = today_in_configured_timezone()
     start_date = (today - datetime.timedelta(days=max(days_back, 0))).isoformat()
     end_date = (today + datetime.timedelta(days=max(days_forward, 0))).isoformat()
 
@@ -1687,7 +1759,7 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
     food_name = str(meal_data.get("food", "")).strip()
     meal_type = str(meal_data.get("meal_type", "")).strip()
     quantity = str(meal_data.get("quantity", "")).strip()
-    meal_date = str(meal_data.get("date", datetime.date.today().isoformat())).strip()
+    meal_date = str(meal_data.get("date", today_iso_in_configured_timezone())).strip()
     datetime.date.fromisoformat(meal_date)
     if not food_name:
         raise ValueError("food is required")
@@ -1695,6 +1767,11 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
         raise ValueError("meal_type is required")
     if not quantity:
         raise ValueError("quantity is required")
+
+    quantity_details = _parse_quantity_details(quantity)
+    canonical_name, reference = _resolve_meal_food_reference(food_name)
+    quantity_in_grams = _convert_quantity_to_grams(food_name, quantity_details, reference)
+    quantity_in_grams_text = _format_grams_quantity(quantity_in_grams)
 
     estimated_calories_raw = meal_data.get("estimated_calories")
     if estimated_calories_raw is not None:
@@ -1704,13 +1781,16 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
         calorie_estimation = {
             "estimated_calories": round(estimated_calories, 2),
             "method": "llm_estimate",
-            "food_reference": "llm",
-            "quantity_details": _parse_quantity_details(quantity),
+            "food_reference": canonical_name or "llm",
+            "quantity_details": quantity_details,
+            "quantity_in_grams": quantity_in_grams,
+            "quantity_in_grams_text": quantity_in_grams_text,
         }
     else:
         calorie_estimation = _estimate_meal_calories(food_name, quantity)
+        quantity_in_grams = float(calorie_estimation["quantity_in_grams"])
+        quantity_in_grams_text = calorie_estimation["quantity_in_grams_text"]
     estimated_calories = calorie_estimation["estimated_calories"]
-    quantity_details = calorie_estimation["quantity_details"]
 
     food_property, _ = _find_property_name(schema_properties, ("Alimento", "Food", "Nome", "Name"), {"title"})
     meal_property, meal_type_property = _find_property_name(
@@ -1758,11 +1838,11 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
         properties[meal_property] = {"rich_text": _build_notion_rich_text_chunks(meal_type)}
 
     if quantity_type == "number":
-        properties[quantity_property] = {"number": float(quantity_details["amount"])}
+        properties[quantity_property] = {"number": quantity_in_grams}
     elif quantity_type == "title":
-        properties[quantity_property] = {"title": [{"text": {"content": quantity}}]}
+        properties[quantity_property] = {"title": [{"text": {"content": quantity_in_grams_text}}]}
     else:
-        properties[quantity_property] = {"rich_text": _build_notion_rich_text_chunks(quantity)}
+        properties[quantity_property] = {"rich_text": _build_notion_rich_text_chunks(quantity_in_grams_text)}
 
     if calories_type == "number":
         properties[calories_property] = {"number": float(estimated_calories)}
@@ -1811,7 +1891,8 @@ def create_meal_in_meals_db(meal_data, project_logger=None):
             "page_url": payload.get("url"),
             "food": food_name,
             "meal_type": meal_type,
-            "quantity": quantity,
+            "quantity": quantity_in_grams_text,
+            "quantity_grams": quantity_in_grams,
             "date": meal_date,
             "calories": estimated_calories,
             "calorie_estimation_method": calorie_estimation["method"],
@@ -2029,12 +2110,12 @@ def create_exercise_in_exercises_db(exercise_data, project_logger=None):
     if calories <= 0:
         raise ValueError("calories must be greater than zero")
 
-    exercise_date = str(exercise_data.get("date", datetime.date.today().isoformat())).strip()
+    exercise_date = str(exercise_data.get("date", today_iso_in_configured_timezone())).strip()
     exercise_date_value = datetime.date.fromisoformat(exercise_date)
     observations = str(exercise_data.get("observations", "")).strip()
     raw_done = exercise_data.get("done")
     if raw_done is None:
-        done = exercise_date_value <= datetime.date.today()
+        done = exercise_date_value <= today_in_configured_timezone()
     else:
         done = _coerce_boolean_value(raw_done, field_name="done")
 

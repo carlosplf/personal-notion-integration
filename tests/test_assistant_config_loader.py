@@ -37,6 +37,7 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("search_email_attachments", agent.tools)
         self.assertIn("analyze_email_attachment", agent.tools)
         self.assertIn("orientações incisivas e diretas", agent.system_prompt)
+        self.assertIn("convertendo a quantidade para gramas", agent.system_prompt)
         self.assertIn("done=false para atividades futuras", agent.system_prompt)
         self.assertIn("parâmetro date", agent.system_prompt)
 

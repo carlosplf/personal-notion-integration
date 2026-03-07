@@ -188,76 +188,79 @@ class TestDiscordBot(unittest.TestCase):
         self.assertFalse(discord_bot._is_dm_reset_shortcut("/reset agora"))
 
     def test_filter_tasks_for_today(self):
-        today = datetime.date.today().isoformat()
+        today = "2026-03-01"
         tasks = [
             {"name": "Hoje", "deadline": f"{today}T10:00:00", "project": "Pessoal"},
             {"name": "Outro dia", "deadline": "2099-12-31T09:00:00", "project": "Pessoal"},
         ]
-        filtered = discord_bot.filter_tasks_for_today(tasks)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_tasks_for_today(tasks)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["name"], "Hoje")
 
     def test_filter_events_for_today(self):
-        today = datetime.date.today().isoformat()
+        today = "2026-03-01"
         events = [
             {"summary": "Evento hoje", "start": f"{today}T09:00:00"},
             {"summary": "Evento futuro", "start": "2099-12-31T09:00:00"},
         ]
-        filtered = discord_bot.filter_events_for_today(events)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_events_for_today(events)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["summary"], "Evento hoje")
 
     def test_filter_tasks_for_tomorrow(self):
-        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        tomorrow = "2026-03-02"
         tasks = [
             {"name": "Amanhã", "deadline": f"{tomorrow}T10:00:00", "project": "Pessoal"},
-            {"name": "Hoje", "deadline": f"{datetime.date.today().isoformat()}T10:00:00", "project": "Pessoal"},
+            {"name": "Hoje", "deadline": "2026-03-01T10:00:00", "project": "Pessoal"},
         ]
-        filtered = discord_bot.filter_tasks_for_tomorrow(tasks)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_tasks_for_tomorrow(tasks)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["name"], "Amanhã")
 
     def test_filter_events_for_tomorrow(self):
-        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        tomorrow = "2026-03-02"
         events = [
             {"summary": "Evento amanhã", "start": f"{tomorrow}T09:00:00"},
-            {"summary": "Evento hoje", "start": f"{datetime.date.today().isoformat()}T09:00:00"},
+            {"summary": "Evento hoje", "start": "2026-03-01T09:00:00"},
         ]
-        filtered = discord_bot.filter_events_for_tomorrow(events)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_events_for_tomorrow(events)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["summary"], "Evento amanhã")
 
     def test_filter_tasks_for_current_week(self):
-        week_start, week_end = discord_bot._current_week_bounds()
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            week_start, week_end = discord_bot._current_week_bounds()
         in_week = week_start.isoformat()
         out_week = (week_end + datetime.timedelta(days=7)).isoformat()
         tasks = [
             {"name": "Dentro", "deadline": f"{in_week}T10:00:00", "project": "Pessoal"},
             {"name": "Fora", "deadline": f"{out_week}T10:00:00", "project": "Pessoal"},
         ]
-        filtered = discord_bot.filter_tasks_for_current_week(tasks)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_tasks_for_current_week(tasks)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["name"], "Dentro")
 
     def test_filter_events_for_current_week(self):
-        week_start, week_end = discord_bot._current_week_bounds()
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            week_start, week_end = discord_bot._current_week_bounds()
         in_week = week_start.isoformat()
         out_week = (week_end + datetime.timedelta(days=7)).isoformat()
         events = [
             {"summary": "Dentro", "start": f"{in_week}T09:00:00"},
             {"summary": "Fora", "start": f"{out_week}T09:00:00"},
         ]
-        filtered = discord_bot.filter_events_for_current_week(events)
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
+            filtered = discord_bot.filter_events_for_current_week(events)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["summary"], "Dentro")
 
     def test_current_week_bounds_on_sunday_starts_today(self):
-        class _SundayDate(datetime.date):
-            @classmethod
-            def today(cls):
-                return cls(2026, 3, 1)
-
-        with unittest.mock.patch.object(discord_bot.datetime, "date", _SundayDate):
+        with unittest.mock.patch.object(discord_bot, "today_in_configured_timezone", return_value=datetime.date(2026, 3, 1)):
             week_start, week_end = discord_bot._current_week_bounds()
 
         self.assertEqual(week_start.isoformat(), "2026-03-01")

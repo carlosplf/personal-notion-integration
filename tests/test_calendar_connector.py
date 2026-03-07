@@ -1,7 +1,9 @@
 import json
+import datetime
 import tempfile
 import unittest
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from calendar_connector import calendar_connector
 
@@ -98,12 +100,19 @@ class TestCalendarConnector(unittest.TestCase):
         fake_service = _FakeService()
         mock_connect.return_value = fake_service
 
-        events = calendar_connector.list_week_events(
-            project_logger=_MockLogger(),
-        )
+        with patch(
+            "calendar_connector.calendar_connector.now_in_configured_timezone",
+            return_value=datetime.datetime(2026, 3, 5, 18, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+        ):
+            events = calendar_connector.list_week_events(
+                project_logger=_MockLogger(),
+            )
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["summary"], "Event primary")
+        call_kwargs = fake_service.events().calls[0]
+        self.assertEqual(call_kwargs["timeMin"], "2026-03-05T21:00:00Z")
+        self.assertEqual(call_kwargs["timeMax"], "2026-03-12T21:00:00Z")
 
     @patch("calendar_connector.calendar_connector.calendar_connect")
     def test_list_current_week_events_uses_primary_calendar(self, mock_connect):
@@ -123,20 +132,21 @@ class TestCalendarConnector(unittest.TestCase):
 
     @patch("calendar_connector.calendar_connector.calendar_connect")
     def test_list_current_week_events_on_sunday_uses_next_six_days(self, mock_connect):
-        class _SundayDateTime(calendar_connector.datetime.datetime):
-            @classmethod
-            def utcnow(cls):
-                return cls(2026, 3, 1, 12, 0, 0)
-
         fake_service = _FakeService()
         mock_connect.return_value = fake_service
 
-        with patch("calendar_connector.calendar_connector.datetime.datetime", _SundayDateTime):
+        with patch(
+            "calendar_connector.calendar_connector.today_in_configured_timezone",
+            return_value=datetime.date(2026, 3, 1),
+        ), patch(
+            "calendar_connector.calendar_connector.get_configured_timezone",
+            return_value=ZoneInfo("America/Sao_Paulo"),
+        ):
             calendar_connector.list_current_week_events(project_logger=_MockLogger())
 
         call_kwargs = fake_service.events().calls[0]
-        self.assertTrue(call_kwargs["timeMin"].startswith("2026-03-01T00:00:00"))
-        self.assertTrue(call_kwargs["timeMax"].startswith("2026-03-08T00:00:00"))
+        self.assertEqual(call_kwargs["timeMin"], "2026-03-01T03:00:00Z")
+        self.assertEqual(call_kwargs["timeMax"], "2026-03-08T03:00:00Z")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from notion_connector import notion_connector
 from openai_connector import llm_api
 from task_summary_flow import collect_tasks_and_summary
 from utils import create_logger
+from utils.timezone_utils import today_in_configured_timezone
 
 MAX_DISCORD_MESSAGE_LENGTH = 2000
 DISCORD_CHUNK_TARGET = 1800
@@ -327,17 +328,17 @@ def _format_time_label(value):
 
 
 def filter_tasks_for_today(tasks):
-    today = datetime.date.today().isoformat()
+    today = today_in_configured_timezone().isoformat()
     return [task for task in tasks if _extract_iso_date(task.get("deadline")) == today]
 
 
 def filter_events_for_today(events):
-    today = datetime.date.today().isoformat()
+    today = today_in_configured_timezone().isoformat()
     return [event for event in events if _extract_iso_date(event.get("start")) == today]
 
 
 def _current_week_bounds():
-    today = datetime.date.today()
+    today = today_in_configured_timezone()
     days_since_sunday = (today.weekday() + 1) % 7
     week_start = today - datetime.timedelta(days=days_since_sunday)
     week_end = week_start + datetime.timedelta(days=6)
@@ -345,12 +346,12 @@ def _current_week_bounds():
 
 
 def filter_tasks_for_tomorrow(tasks):
-    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    tomorrow = (today_in_configured_timezone() + datetime.timedelta(days=1)).isoformat()
     return [task for task in tasks if _extract_iso_date(task.get("deadline")) == tomorrow]
 
 
 def filter_events_for_tomorrow(events):
-    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    tomorrow = (today_in_configured_timezone() + datetime.timedelta(days=1)).isoformat()
     return [event for event in events if _extract_iso_date(event.get("start")) == tomorrow]
 
 
@@ -796,7 +797,7 @@ def create_discord_client(project_logger=None):
         await interaction.response.defer(thinking=True)
         try:
             week_start, week_end = _current_week_bounds()
-            days_until_week_end = max((week_end - datetime.date.today()).days, 0)
+            days_until_week_end = max((week_end - today_in_configured_timezone()).days, 0)
             tasks = notion_connector.collect_tasks_from_control_panel(
                 n_days=days_until_week_end,
                 project_logger=logger,

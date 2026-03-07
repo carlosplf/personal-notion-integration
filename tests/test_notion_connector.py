@@ -4,6 +4,7 @@ import requests
 from unittest.mock import patch
 
 from notion_connector import notion_connector
+from utils.timezone_utils import today_iso_in_configured_timezone
 
 
 class _MockResponse:
@@ -168,7 +169,7 @@ class TestNotionConnector(unittest.TestCase):
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["parent"]["database_id"], "notes-db-id")
         self.assertEqual(payload["properties"]["Name"]["title"][0]["text"]["content"], "Ideia de onboarding")
-        self.assertEqual(payload["properties"]["Date"]["date"]["start"], datetime.date.today().isoformat())
+        self.assertEqual(payload["properties"]["Date"]["date"]["start"], today_iso_in_configured_timezone())
         self.assertIn("Tags", payload["properties"])
 
     @patch("notion_connector.notion_connector.requests.get")
@@ -293,6 +294,11 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(bacon["estimated_calories"], 270.5)
         self.assertEqual(coffee["estimated_calories"], 3.0)
 
+    def test_estimate_meal_calories_converts_unit_quantity_to_grams(self):
+        estimation = notion_connector._estimate_meal_calories("Ovo mexido", "3 ovos")
+        self.assertEqual(estimation["quantity_in_grams"], 150.0)
+        self.assertEqual(estimation["quantity_in_grams_text"], "150 g")
+
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
@@ -327,7 +333,8 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(payload["parent"]["database_id"], "meals-db-id")
         self.assertEqual(payload["properties"]["Alimento"]["title"][0]["text"]["content"], "Arroz branco")
         self.assertEqual(payload["properties"]["Refeição"]["select"]["name"], "Almoço")
-        self.assertEqual(payload["properties"]["Data"]["date"]["start"], datetime.date.today().isoformat())
+        self.assertEqual(payload["properties"]["Data"]["date"]["start"], today_iso_in_configured_timezone())
+        self.assertEqual(payload["properties"]["Quantidade"]["rich_text"][0]["text"]["content"], "150 g")
         self.assertEqual(payload["properties"]["Calorias"]["number"], 195.0)
 
     @patch("notion_connector.notion_connector.requests.get")
@@ -362,9 +369,48 @@ class TestNotionConnector(unittest.TestCase):
 
         self.assertEqual(result["id"], "meal-2")
         self.assertEqual(result["calorie_estimation_method"], "llm_estimate")
+        self.assertEqual(result["quantity"], "100 g")
+        self.assertEqual(result["quantity_grams"], 100.0)
         payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["properties"]["Quantidade"]["rich_text"][0]["text"]["content"], "100 g")
         self.assertEqual(payload["properties"]["Calorias"]["number"], 230.0)
         self.assertEqual(payload["properties"]["Data"]["date"]["start"], "2026-04-12")
+
+    @patch("notion_connector.notion_connector.requests.get")
+    @patch("notion_connector.notion_connector.requests.post")
+    @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
+    def test_create_meal_in_meals_db_stores_quantity_as_grams_when_property_is_number(
+        self, mock_load_credentials, mock_post, mock_get
+    ):
+        mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
+        mock_get.return_value = _MockResponse(
+            {
+                "properties": {
+                    "Alimento": {"type": "title"},
+                    "Refeição": {"type": "select"},
+                    "Data": {"type": "date"},
+                    "Quantidade": {"type": "number"},
+                    "Calorias": {"type": "number"},
+                }
+            }
+        )
+        mock_post.return_value = _MockResponse({"id": "meal-3", "url": "https://notion.so/meal-3"})
+
+        with patch.dict("os.environ", {"NOTION_MEALS_DB_ID": "meals-db-id"}, clear=False):
+            result = notion_connector.create_meal_in_meals_db(
+                {
+                    "food": "Ovo mexido",
+                    "meal_type": "Café da manhã",
+                    "quantity": "3 ovos",
+                },
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(result["id"], "meal-3")
+        self.assertEqual(result["quantity"], "150 g")
+        self.assertEqual(result["quantity_grams"], 150.0)
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["properties"]["Quantidade"]["number"], 150.0)
 
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")

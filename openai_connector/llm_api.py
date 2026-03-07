@@ -5,6 +5,8 @@ import json
 import openai
 from dotenv import load_dotenv
 
+from utils.timezone_utils import today_in_configured_timezone, today_iso_in_configured_timezone
+
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_AUDIO_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
@@ -226,7 +228,7 @@ def parse_add_task_output(output_text):
     if not task_name:
         raise ValueError("LLM did not provide task_name")
     if not due_date:
-        due_date = datetime.date.today().isoformat()
+        due_date = today_iso_in_configured_timezone()
     try:
         datetime.date.fromisoformat(due_date)
     except ValueError as error:
@@ -304,7 +306,7 @@ def _build_overdue_label(deadline):
         return "NO PRAZO"
     try:
         deadline_date = datetime.date.fromisoformat(str(deadline).split("T")[0])
-        return "ATRASADA" if deadline_date < datetime.date.today() else "NO PRAZO"
+        return "ATRASADA" if deadline_date < today_in_configured_timezone() else "NO PRAZO"
     except ValueError:
         return "NO PRAZO"
 

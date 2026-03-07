@@ -8,6 +8,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
+from utils.timezone_utils import get_configured_timezone, now_in_configured_timezone, today_in_configured_timezone
+
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -62,9 +64,13 @@ def _extract_first_json_object(content):
     return payload
 
 
+def _to_utc_rfc3339(value):
+    return value.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def list_upcoming_events(project_logger, max_results=10):
     service = calendar_connect(project_logger=project_logger)
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = _to_utc_rfc3339(now_in_configured_timezone())
 
     response = service.events().list(
         calendarId="primary",
@@ -90,13 +96,13 @@ def list_upcoming_events(project_logger, max_results=10):
 
 def list_week_events(project_logger, max_results=100):
     service = calendar_connect(project_logger=project_logger)
-    now = datetime.datetime.utcnow()
+    now = now_in_configured_timezone()
     week_end = now + datetime.timedelta(days=7)
 
     response = service.events().list(
         calendarId="primary",
-        timeMin=now.isoformat() + "Z",
-        timeMax=week_end.isoformat() + "Z",
+        timeMin=_to_utc_rfc3339(now),
+        timeMax=_to_utc_rfc3339(week_end),
         maxResults=max_results,
         singleEvents=True,
         orderBy="startTime",
@@ -121,16 +127,20 @@ def list_week_events(project_logger, max_results=100):
 
 def list_current_week_events(project_logger, max_results=100):
     service = calendar_connect(project_logger=project_logger)
-    today = datetime.datetime.utcnow().date()
+    today = today_in_configured_timezone()
     days_since_sunday = (today.weekday() + 1) % 7
     week_start_date = today - datetime.timedelta(days=days_since_sunday)
-    week_start = datetime.datetime.combine(week_start_date, datetime.time.min)
+    week_start = datetime.datetime.combine(
+        week_start_date,
+        datetime.time.min,
+        tzinfo=get_configured_timezone(),
+    )
     next_week_start = week_start + datetime.timedelta(days=7)
 
     response = service.events().list(
         calendarId="primary",
-        timeMin=week_start.isoformat() + "Z",
-        timeMax=next_week_start.isoformat() + "Z",
+        timeMin=_to_utc_rfc3339(week_start),
+        timeMax=_to_utc_rfc3339(next_week_start),
         maxResults=max_results,
         singleEvents=True,
         orderBy="startTime",
