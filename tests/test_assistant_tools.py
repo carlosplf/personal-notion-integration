@@ -381,8 +381,10 @@ class TestAssistantTools(unittest.TestCase):
         self.assertTrue(any("regra mínima" in insight for insight in result["insights"]))
         self.assertTrue(any("itens açucarados" in insight for insight in result["insights"]))
 
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_exercises_from_database")
     @patch("assistant_connector.tools.notion_tools.notion_connector.create_exercise_in_exercises_db")
-    def test_register_notion_exercise_creates_entry_with_required_fields(self, mock_create_exercise):
+    def test_register_notion_exercise_creates_entry_with_required_fields(self, mock_create_exercise, mock_collect):
+        mock_collect.return_value = []
         mock_create_exercise.return_value = {
             "id": "exercise-1",
             "activity": "Corrida",
@@ -409,6 +411,32 @@ class TestAssistantTools(unittest.TestCase):
         self.assertEqual(payload["calories"], 300.0)
         self.assertEqual(payload["date"], "2999-03-10")
         self.assertFalse(payload["done"])
+
+    @patch("assistant_connector.tools.notion_tools.notion_connector.collect_exercises_from_database")
+    def test_register_notion_exercise_detects_duplicate(self, mock_collect):
+        mock_collect.return_value = [
+            {
+                "id": "existing-exercise-1",
+                "activity": "Corrida",
+                "date": "2026-03-10",
+                "calories": 200.0,
+                "done": False,
+                "page_url": "https://notion.so/existing-exercise-1",
+            },
+        ]
+
+        result = notion_tools.register_notion_exercise(
+            {
+                "atividade": "Corrida",
+                "calorias": 350,
+                "data": "2026-03-10",
+                "done": True,
+            },
+            _build_context(),
+        )
+
+        self.assertEqual(result["error"], "duplicate_exercise_found")
+        self.assertEqual(result["existing_exercise"]["id"], "existing-exercise-1")
 
     def test_register_notion_exercise_rejects_invalid_date(self):
         with self.assertRaisesRegex(ValueError, "date must be a valid ISO date"):

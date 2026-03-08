@@ -44,11 +44,11 @@ class TestAssistantConfigLoader(unittest.TestCase):
             configuration.tools["analyze_notion_meals"].prompt_guidance,
         )
         self.assertIn(
-            "convertida para gramas",
+            "unidade original do usuário",
             configuration.tools["register_notion_meal"].prompt_guidance,
         )
         self.assertIn(
-            "done=false ao planejar atividades futuras",
+            "duplicate_exercise_found",
             configuration.tools["register_notion_exercise"].prompt_guidance,
         )
         self.assertIn(

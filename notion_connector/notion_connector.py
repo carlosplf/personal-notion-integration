@@ -592,29 +592,66 @@ def _parse_quantity_details(quantity):
     }
 
 
-def _convert_quantity_to_grams(quantity_details):
+_WEIGHT_UNITS = {"g", "kg"}
+_VOLUME_UNITS = {"ml", "l"}
+_DISCRETE_UNITS = {"unit", "portion", "cup", "tbsp", "tsp"}
+
+_UNIT_DISPLAY_LABELS = {
+    "g": "g",
+    "kg": "kg",
+    "ml": "ml",
+    "l": "l",
+    "unit": "un",
+    "portion": "porção",
+    "cup": "xícara",
+    "tbsp": "colher de sopa",
+    "tsp": "colher de chá",
+}
+
+
+def _normalize_quantity(quantity_details):
+    """Normalize parsed quantity into a base unit for its family.
+
+    Weight  -> grams (g)
+    Volume  -> milliliters (ml)
+    Discrete / unknown -> kept as-is
+    """
     amount = float(quantity_details["amount"])
     unit = quantity_details["unit"]
 
     if unit == "g":
-        grams = amount
+        normalized_amount = amount
+        normalized_unit = "g"
     elif unit == "kg":
-        grams = amount * 1000.0
+        normalized_amount = amount * 1000.0
+        normalized_unit = "g"
+    elif unit == "ml":
+        normalized_amount = amount
+        normalized_unit = "ml"
+    elif unit == "l":
+        normalized_amount = amount * 1000.0
+        normalized_unit = "ml"
     else:
-        raise ValueError("quantity must be provided in grams (e.g., '150 g')")
+        normalized_amount = amount
+        normalized_unit = unit
 
-    if grams <= 0:
-        raise ValueError("quantity in grams must be greater than zero")
-    return round(grams, 2)
+    if normalized_amount <= 0:
+        raise ValueError("quantity must be greater than zero")
+    return {
+        "amount": round(normalized_amount, 2),
+        "unit": normalized_unit,
+    }
 
 
-def _format_grams_quantity(amount_in_grams):
-    normalized = round(float(amount_in_grams), 2)
-    if normalized.is_integer():
-        display_value = str(int(normalized))
+def _format_quantity(normalized_amount, normalized_unit):
+    """Format a normalized quantity for human-readable display."""
+    value = round(float(normalized_amount), 2)
+    if value.is_integer():
+        display_value = str(int(value))
     else:
-        display_value = f"{normalized:.2f}".rstrip("0").rstrip(".")
-    return f"{display_value} g"
+        display_value = f"{value:.2f}".rstrip("0").rstrip(".")
+    label = _UNIT_DISPLAY_LABELS.get(normalized_unit, normalized_unit)
+    return f"{display_value} {label}"
 
 
 def _build_create_note_payload(note_data, tags_property_type, observations_property):
@@ -1565,8 +1602,10 @@ def create_meal_in_meals_db(meal_data, project_logger=None, user_id=None, creden
         raise ValueError("quantity is required")
 
     quantity_details = _parse_quantity_details(quantity)
-    quantity_in_grams = _convert_quantity_to_grams(quantity_details)
-    quantity_in_grams_text = _format_grams_quantity(quantity_in_grams)
+    normalized = _normalize_quantity(quantity_details)
+    normalized_amount = normalized["amount"]
+    normalized_unit = normalized["unit"]
+    quantity_display_text = _format_quantity(normalized_amount, normalized_unit)
 
     estimated_calories_raw = meal_data.get("estimated_calories")
     if estimated_calories_raw is None:
@@ -1578,8 +1617,9 @@ def create_meal_in_meals_db(meal_data, project_logger=None, user_id=None, creden
         "estimated_calories": round(estimated_calories, 2),
         "method": "llm_estimate",
         "quantity_details": quantity_details,
-        "quantity_in_grams": quantity_in_grams,
-        "quantity_in_grams_text": quantity_in_grams_text,
+        "normalized_amount": normalized_amount,
+        "normalized_unit": normalized_unit,
+        "quantity_display_text": quantity_display_text,
     }
     estimated_calories = calorie_estimation["estimated_calories"]
 
@@ -1629,11 +1669,11 @@ def create_meal_in_meals_db(meal_data, project_logger=None, user_id=None, creden
         properties[meal_property] = {"rich_text": _build_notion_rich_text_chunks(meal_type)}
 
     if quantity_type == "number":
-        properties[quantity_property] = {"number": quantity_in_grams}
+        properties[quantity_property] = {"number": normalized_amount}
     elif quantity_type == "title":
-        properties[quantity_property] = {"title": [{"text": {"content": quantity_in_grams_text}}]}
+        properties[quantity_property] = {"title": [{"text": {"content": quantity_display_text}}]}
     else:
-        properties[quantity_property] = {"rich_text": _build_notion_rich_text_chunks(quantity_in_grams_text)}
+        properties[quantity_property] = {"rich_text": _build_notion_rich_text_chunks(quantity_display_text)}
 
     if calories_type == "number":
         properties[calories_property] = {"number": float(estimated_calories)}
@@ -1682,8 +1722,9 @@ def create_meal_in_meals_db(meal_data, project_logger=None, user_id=None, creden
             "page_url": payload.get("url"),
             "food": food_name,
             "meal_type": meal_type,
-            "quantity": quantity_in_grams_text,
-            "quantity_grams": quantity_in_grams,
+            "quantity": quantity_display_text,
+            "normalized_amount": normalized_amount,
+            "normalized_unit": normalized_unit,
             "date": meal_date,
             "calories": estimated_calories,
             "calorie_estimation_method": calorie_estimation["method"],

@@ -278,10 +278,40 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(expenses[0]["category"], "Transporte")
         self.assertEqual(expenses[0]["description"], "Uber ida")
 
-    def test_convert_quantity_to_grams_requires_gram_units(self):
-        details = notion_connector._parse_quantity_details("3 ovos")
+    def test_normalize_quantity_handles_all_unit_families(self):
+        # Weight units
+        self.assertEqual(
+            notion_connector._normalize_quantity({"amount": 150, "unit": "g"}),
+            {"amount": 150.0, "unit": "g"},
+        )
+        self.assertEqual(
+            notion_connector._normalize_quantity({"amount": 1.5, "unit": "kg"}),
+            {"amount": 1500.0, "unit": "g"},
+        )
+        # Volume units
+        self.assertEqual(
+            notion_connector._normalize_quantity({"amount": 250, "unit": "ml"}),
+            {"amount": 250.0, "unit": "ml"},
+        )
+        self.assertEqual(
+            notion_connector._normalize_quantity({"amount": 1, "unit": "l"}),
+            {"amount": 1000.0, "unit": "ml"},
+        )
+        # Discrete units pass through
+        result = notion_connector._normalize_quantity({"amount": 3, "unit": "unit"})
+        self.assertEqual(result, {"amount": 3.0, "unit": "unit"})
+
+    def test_normalize_quantity_rejects_zero_or_negative(self):
         with self.assertRaises(ValueError):
-            notion_connector._convert_quantity_to_grams(details)
+            notion_connector._normalize_quantity({"amount": 0, "unit": "g"})
+        with self.assertRaises(ValueError):
+            notion_connector._normalize_quantity({"amount": -5, "unit": "ml"})
+
+    def test_format_quantity_displays_correct_labels(self):
+        self.assertEqual(notion_connector._format_quantity(150, "g"), "150 g")
+        self.assertEqual(notion_connector._format_quantity(250, "ml"), "250 ml")
+        self.assertEqual(notion_connector._format_quantity(3, "unit"), "3 un")
+        self.assertEqual(notion_connector._format_quantity(1.5, "cup"), "1.5 xícara")
 
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
@@ -356,7 +386,8 @@ class TestNotionConnector(unittest.TestCase):
         self.assertEqual(result["id"], "meal-2")
         self.assertEqual(result["calorie_estimation_method"], "llm_estimate")
         self.assertEqual(result["quantity"], "100 g")
-        self.assertEqual(result["quantity_grams"], 100.0)
+        self.assertEqual(result["normalized_amount"], 100.0)
+        self.assertEqual(result["normalized_unit"], "g")
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["Quantidade"]["rich_text"][0]["text"]["content"], "100 g")
         self.assertEqual(payload["properties"]["Calorias"]["number"], 230.0)
@@ -365,7 +396,7 @@ class TestNotionConnector(unittest.TestCase):
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
     @patch("notion_connector.notion_connector.load_credentials.load_notion_credentials")
-    def test_create_meal_in_meals_db_rejects_non_gram_units(
+    def test_create_meal_in_meals_db_accepts_non_gram_units(
         self, mock_load_credentials, mock_post, mock_get
     ):
         mock_load_credentials.return_value = {"database_id": "tasks-db-id", "api_key": "api-key"}
@@ -375,7 +406,7 @@ class TestNotionConnector(unittest.TestCase):
                     "Alimento": {"type": "title"},
                     "Refeição": {"type": "select"},
                     "Data": {"type": "date"},
-                    "Quantidade": {"type": "number"},
+                    "Quantidade": {"type": "rich_text"},
                     "Calorias": {"type": "number"},
                 }
             }
@@ -383,16 +414,25 @@ class TestNotionConnector(unittest.TestCase):
         mock_post.return_value = _MockResponse({"id": "meal-3", "url": "https://notion.so/meal-3"})
 
         with patch.dict("os.environ", {"NOTION_MEALS_DB_ID": "meals-db-id"}, clear=False):
-            with self.assertRaises(ValueError):
-                notion_connector.create_meal_in_meals_db(
-                    {
-                        "food": "Ovo mexido",
-                        "meal_type": "Café da manhã",
-                        "quantity": "3 ovos",
-                        "estimated_calories": 230,
-                    },
-                    project_logger=_MockLogger(),
-                )
+            result = notion_connector.create_meal_in_meals_db(
+                {
+                    "food": "Suco de laranja",
+                    "meal_type": "Café da manhã",
+                    "quantity": "250 ml",
+                    "estimated_calories": 112,
+                },
+                project_logger=_MockLogger(),
+            )
+
+        self.assertEqual(result["id"], "meal-3")
+        self.assertEqual(result["normalized_unit"], "ml")
+        self.assertEqual(result["normalized_amount"], 250.0)
+        self.assertEqual(result["quantity"], "250 ml")
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(
+            payload["properties"]["Quantidade"]["rich_text"][0]["text"]["content"],
+            "250 ml",
+        )
 
     @patch("notion_connector.notion_connector.requests.get")
     @patch("notion_connector.notion_connector.requests.post")
@@ -458,7 +498,7 @@ class TestNotionConnector(unittest.TestCase):
 
         self.assertEqual(result["id"], "meal-3")
         self.assertEqual(result["quantity"], "180 g")
-        self.assertEqual(result["quantity_grams"], 180.0)
+        self.assertEqual(result["normalized_amount"], 180.0)
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["properties"]["Quantidade"]["number"], 180.0)
 

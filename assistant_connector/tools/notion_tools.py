@@ -385,6 +385,29 @@ def register_notion_meal(arguments, context):
     }
 
 
+def _find_existing_exercise(activity, exercise_date, context):
+    """Search for an existing exercise matching activity and date."""
+    date_str = str(exercise_date)
+    start_datetime = f"{date_str}T00:00:00Z"
+    end_datetime = f"{date_str}T23:59:59Z"
+    try:
+        exercises = notion_connector.collect_exercises_from_database(
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            project_logger=context.project_logger,
+            user_id=context.user_id,
+            credential_store=context.user_credential_store,
+        )
+    except Exception:
+        return None
+    normalized_activity = activity.strip().lower()
+    for exercise in exercises:
+        existing_activity = str(exercise.get("activity") or "").strip().lower()
+        if existing_activity == normalized_activity:
+            return exercise
+    return None
+
+
 def register_notion_exercise(arguments, context):
     activity = str(arguments.get("atividade", arguments.get("activity", ""))).strip()
     raw_calories = arguments.get("calorias", arguments.get("calories"))
@@ -408,6 +431,17 @@ def register_notion_exercise(arguments, context):
         raise ValueError("calorias must be a valid number")
     if calories <= 0:
         raise ValueError("calorias must be greater than zero")
+
+    existing = _find_existing_exercise(activity, exercise_date, context)
+    if existing:
+        return {
+            "error": "duplicate_exercise_found",
+            "message": (
+                f"Já existe um registro de '{activity}' em {exercise_date}. "
+                "Use edit_notion_exercise com o page_id abaixo para atualizar."
+            ),
+            "existing_exercise": existing,
+        }
 
     created_exercise = notion_connector.create_exercise_in_exercises_db(
         {

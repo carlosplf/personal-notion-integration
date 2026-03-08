@@ -919,8 +919,8 @@
     },
     {
       "name": "register_notion_meal",
-      "description": "Registra alimento consumido no Notion Meals usando calorias estimadas pela LLM e quantidade normalizada em gramas.",
-      "prompt_guidance": "Ao registrar refeição, use categorias exatamente entre ALMOÇO, JANTAR, LANCHE e CAFÉ DA MANHÃ. Quantidade deve ser convertida para gramas antes do registro e calorias estimadas devem ser informadas. Se não houver confiança para estimar calorias e converter para gramas, peça confirmação ao usuário em vez de registrar dados parciais.",
+      "description": "Registra alimento consumido no Notion Meals usando calorias estimadas pela LLM e quantidade na unidade informada pelo usuário.",
+      "prompt_guidance": "Ao registrar refeição, use categorias exatamente entre ALMOÇO, JANTAR, LANCHE e CAFÉ DA MANHÃ. Informe a quantidade na unidade original do usuário (ex.: '250 ml', '2 unidades', '150 g'). Calorias estimadas devem ser informadas. Se não houver confiança para estimar calorias, peça confirmação ao usuário em vez de registrar dados parciais.",
       "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_notion_meal",
       "write_operation": true,
@@ -943,7 +943,7 @@
           },
           "quantidade": {
             "type": "string",
-            "description": "Quantidade informada pelo usuário (ex.: 150 g, 2 unidades, 250 ml). A gravação no Notion é sempre normalizada para gramas."
+            "description": "Quantidade informada pelo usuário com unidade (ex.: '150 g', '2 unidades', '250 ml', '1 litro', '1 xícara'). Aceita gramas, kg, ml, litros, unidades, porções, xícaras e colheres."
           },
           "confirmed": {
             "type": "boolean",
@@ -955,7 +955,7 @@
           },
           "calorias_estimadas": {
             "type": "number",
-            "description": "Estimativa obrigatória de calorias calculada pela LLM para a porção em gramas."
+            "description": "Estimativa obrigatória de calorias calculada pela LLM para a porção informada."
           }
         },
         "required": [
@@ -1001,8 +1001,8 @@
     },
     {
       "name": "register_notion_exercise",
-      "description": "Registra atividade física no Notion Exercises com calorias e status de conclusão (Done), incluindo planejamento futuro.",
-      "prompt_guidance": "Para exercícios no Notion, use done=false ao planejar atividades futuras e done=true quando a atividade estiver concluída.",
+      "description": "Registra atividade física no Notion Exercises com calorias e status de conclusão (Done), incluindo planejamento futuro. Detecta duplicatas automaticamente.",
+      "prompt_guidance": "Antes de registrar um exercício, verifique se já existe um registro planejado (done=false) para a mesma atividade e data. Se register_notion_exercise retornar 'duplicate_exercise_found', use edit_notion_exercise com o page_id retornado para atualizar o registro existente (preencher detalhes e marcar done=true). Use done=false ao planejar atividades futuras e done=true quando a atividade estiver concluída.",
       "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_notion_exercise",
       "write_operation": true,
@@ -1044,6 +1044,8 @@
     {
       "name": "edit_notion_exercise",
       "description": "Edita um registro de atividade física no Notion Exercises, incluindo o campo de conclusão (Done).",
+      "prompt_guidance": "Use edit_notion_exercise para atualizar exercícios já existentes no Notion. O page_id pode ser obtido via analyze_notion_exercises ou pela resposta de duplicate_exercise_found de register_notion_exercise. Ao registrar conclusão de exercício planejado, atualize os campos necessários e marque done=true.",
+      "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:edit_notion_exercise",
       "write_operation": true,
       "input_schema": {
@@ -1370,12 +1372,17 @@
               "replace"
             ],
             "description": "'append' adiciona ao final do arquivo (padrão). 'replace' substitui o conteúdo completo."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
           }
         },
         "required": [
           "file_name",
           "content"
-        ]
+        ],
+        "additionalProperties": false
       },
       "handler": "assistant_connector.tools.memory_tools:edit_memory_file",
       "write_operation": true,
