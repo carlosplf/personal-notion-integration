@@ -8,7 +8,7 @@ from gmail_connector import gmail_connector
 def send_email(arguments, context):
     subject = str(arguments.get("subject", "")).strip()
     body = str(arguments.get("body", "")).strip()
-    recipient = str(arguments.get("recipient_email", "")).strip()
+    recipient = str(arguments.get("recipient_email", "")).strip() or _get_default_recipient(context)
     reply_to_message_id = str(arguments.get("reply_to_message_id", "")).strip()
     if not recipient:
         raise ValueError("recipient_email is required")
@@ -142,6 +142,16 @@ def _get_email_signature(context=None):
     if store is not None and user_id is not None:
         return store.get_credential(user_id, "email_signature") or ""
     return str(os.getenv("EMAIL_ASSISTANT_SIGNATURE", "")).strip()
+
+
+def _get_default_recipient(context=None):
+    store = getattr(context, "user_credential_store", None)
+    user_id = getattr(context, "user_id", None)
+    if store is not None and user_id is not None:
+        recipient = store.get_credential(user_id, "email_to")
+        if recipient:
+            return str(recipient).strip()
+    return str(os.getenv("EMAIL_TO", "")).strip()
 
 
 def _clamp_int(value, *, minimum, maximum, default):

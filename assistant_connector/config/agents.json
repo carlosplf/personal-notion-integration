@@ -602,6 +602,43 @@
       }
     },
     {
+      "name": "register_contact_memory",
+      "description": "Registra um contato em memória persistente (contacts.csv).",
+      "prompt_guidance": "Use register_contact_memory quando o usuário pedir para salvar ou registrar um contato na memória. Exija ao menos email ou telefone.",
+      "guidance_priority": 20,
+      "handler": "assistant_connector.tools.contacts_tools:register_contact_memory",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Nome do contato."
+          },
+          "email": {
+            "type": "string",
+            "description": "Email do contato."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Telefone do contato."
+          },
+          "relationship": {
+            "type": "string",
+            "description": "Relação com o usuário (ex.: amigo, cliente, família)."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "search_emails",
       "description": "Busca emails no Gmail por query, remetente, assunto ou outros filtros da sintaxe Gmail.",
       "handler": "assistant_connector.tools.email_tools:search_emails",
@@ -1320,6 +1357,7 @@
         "create_calendar_event",
         "list_tech_news",
         "search_contacts",
+        "register_contact_memory",
         "search_emails",
         "read_email",
         "search_email_attachments",

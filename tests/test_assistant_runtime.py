@@ -547,6 +547,57 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(answer, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
+    def test_runtime_auto_injects_confirmation_after_explicit_user_confirmation(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "dangerous_write_tool",
+                        "arguments": "{\"task_name\":\"Nova tarefa\"}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Tarefa criada sem reconfirmar.",
+            },
+        ]
+        tool_definitions = {
+            "dangerous_write_tool": ToolDefinition(
+                name="dangerous_write_tool",
+                description="Cria dado externo",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["dangerous_write_tool"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="confirmo, pode enviar",
+            )
+
+        self.assertEqual(answer, "Tarefa criada sem reconfirmar.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
+
     def test_runtime_handles_invalid_tool_arguments_json(self):
         payloads = [
             {

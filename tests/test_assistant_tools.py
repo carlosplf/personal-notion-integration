@@ -1,7 +1,7 @@
 import unittest
 import os
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from assistant_connector.models import AgentDefinition, ToolExecutionContext
 from assistant_connector.tools import (
@@ -22,7 +22,7 @@ class _FakeLogger:
         return None
 
 
-def _build_context():
+def _build_context(memories_dir=None, user_credential_store=None):
     agent = AgentDefinition(
         agent_id="personal_assistant",
         description="desc",
@@ -39,6 +39,8 @@ def _build_context():
         agent=agent,
         available_tools=[{"name": "list_notion_tasks"}],
         available_agents=[{"id": "personal_assistant"}],
+        memories_dir=memories_dir,
+        user_credential_store=user_credential_store,
     )
 
 
@@ -1066,6 +1068,28 @@ class TestAssistantTools(unittest.TestCase):
                 _build_context(),
             )
 
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_uses_default_recipient_from_env(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-3"}
+        with patch.dict(os.environ, {"EMAIL_TO": "default@example.com"}, clear=False):
+            email_tools.send_email(
+                {"subject": "abc", "body": "conteúdo"},
+                _build_context(),
+            )
+        self.assertEqual(mock_send_custom_email.call_args.kwargs["email_to"], "default@example.com")
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_uses_user_credential_recipient(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-4"}
+        credential_store = MagicMock()
+        credential_store.get_credential.return_value = "from-store@example.com"
+
+        email_tools.send_email(
+            {"subject": "abc", "body": "conteúdo"},
+            _build_context(user_credential_store=credential_store),
+        )
+        self.assertEqual(mock_send_custom_email.call_args.kwargs["email_to"], "from-store@example.com")
+
     @patch("assistant_connector.tools.email_tools.gmail_connector.search_emails")
     def test_search_emails_passes_filters(self, mock_search_emails):
         mock_search_emails.return_value = {"returned": 0, "emails": []}
@@ -1161,6 +1185,34 @@ class TestAssistantTools(unittest.TestCase):
             with patch("assistant_connector.tools.contacts_tools.CONTACTS_CSV_PATH", csv_path):
                 with self.assertRaises(ValueError):
                     contacts_tools.search_contacts({"query": "maria"}, _build_context())
+
+    def test_register_contact_memory_writes_csv_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = contacts_tools.register_contact_memory(
+                {
+                    "name": "Maria Silva",
+                    "email": "maria@example.com",
+                    "phone": "11999990000",
+                    "relationship": "amiga",
+                },
+                _build_context(memories_dir=temp_dir),
+            )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(os.path.isfile(os.path.join(temp_dir, "contacts.csv")))
+            self.assertNotIn("contacts_md_path", result)
+
+            search_result = contacts_tools.search_contacts({"query": "maria"}, _build_context(memories_dir=temp_dir))
+            self.assertEqual(search_result["total"], 1)
+            self.assertEqual(search_result["contacts"][0]["email"], "maria@example.com")
+
+    def test_register_contact_memory_requires_email_or_phone(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "email or phone is required"):
+                contacts_tools.register_contact_memory(
+                    {"name": "Maria Silva"},
+                    _build_context(memories_dir=temp_dir),
+                )
 
 
 if __name__ == "__main__":

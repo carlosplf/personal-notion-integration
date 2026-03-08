@@ -167,7 +167,7 @@ In any message, the assistant can:
 - **Gmail**: send emails (with explicit confirmation), search and read messages.
 - **Scheduled tasks**: create recurring or one-time tasks delivered via Telegram (and optionally email).
 - **Tech news**: fetch the latest news from configured RSS sources.
-- **Contacts**: search contacts from `memories/contacts.csv`.
+- **Contacts**: search contacts from `memories/contacts.csv` and register new contacts in persistent memory (`contacts.csv`).
 - **Voice messages**: voice notes are transcribed automatically (Whisper) and processed as text.
 
 For expense analysis, `analyze_monthly_expenses` supports a `date` parameter (YYYY-MM-DD) to isolate a specific day.

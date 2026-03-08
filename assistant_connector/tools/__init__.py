@@ -1,5 +1,5 @@
 from assistant_connector.tools.calendar_tools import create_calendar_event, list_calendar_events
-from assistant_connector.tools.contacts_tools import search_contacts
+from assistant_connector.tools.contacts_tools import register_contact_memory, search_contacts
 from assistant_connector.tools.email_tools import (
     analyze_email_attachment,
     read_email,
@@ -43,6 +43,7 @@ __all__ = [
     "create_calendar_event",
     "list_calendar_events",
     "search_contacts",
+    "register_contact_memory",
     "register_financial_expense",
     "register_notion_meal",
     "register_notion_exercise",

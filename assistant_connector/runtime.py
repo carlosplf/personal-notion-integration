@@ -18,6 +18,12 @@ BLOCKED_SCHEDULED_EXECUTION_TOOLS = {
     "cancel_scheduled_task",
     "list_scheduled_tasks",
 }
+_NEGATIVE_CONFIRMATION_RE = re.compile(
+    r"\b(n[aã]o|nao|jamais|nunca)\s+(confirmo|confirmar|confirme|autorizar|autorize|enviar|mande|executar)\b"
+)
+_EXPLICIT_CONFIRMATION_RE = re.compile(
+    r"\b(confirmo|confirmar|confirmado|confirme|autorizo|autorizar|autorize|pode enviar|pode mandar|pode executar|pode prosseguir)\b"
+)
 
 
 def _load_memories_from_dir(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
@@ -141,6 +147,7 @@ class AssistantRuntime:
             input=self._build_input_messages(history, clean_message, user_memories),
             tools=openai_tools,
         )
+        write_confirmation_granted = self._has_explicit_confirmation(clean_message)
 
         for _ in range(max(self._agent.max_tool_rounds, 1)):
             function_calls = self._extract_function_calls(response)
@@ -163,6 +170,15 @@ class AssistantRuntime:
                         "details": str(error),
                     }
                 else:
+                    tool_definition = self._tool_registry.get_tool_definition(tool_name)
+                    if (
+                        tool_definition.write_operation
+                        and write_confirmation_granted
+                        and "confirmed" not in arguments
+                    ):
+                        arguments = {**arguments, "confirmed": True}
+                    if tool_definition.write_operation and bool(arguments.get("confirmed", False)):
+                        write_confirmation_granted = True
                     result = self._execute_tool_call(tool_name, arguments, context)
                 self._memory_store.log_tool_call(
                     session_id=session_id,
@@ -393,6 +409,15 @@ class AssistantRuntime:
     @staticmethod
     def _is_scheduled_execution_session(session_id: str) -> bool:
         return ":scheduled:" in str(session_id or "")
+
+    @staticmethod
+    def _has_explicit_confirmation(message: str) -> bool:
+        text = str(message or "").strip().lower()
+        if not text:
+            return False
+        if _NEGATIVE_CONFIRMATION_RE.search(text):
+            return False
+        return bool(_EXPLICIT_CONFIRMATION_RE.search(text))
 
     def _extract_function_calls(self, response) -> list[dict[str, str]]:
         output_items = self._item_get(response, "output", []) or []
