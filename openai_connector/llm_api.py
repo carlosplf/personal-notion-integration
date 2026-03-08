@@ -2,6 +2,7 @@ import logging
 import os
 import datetime
 import json
+import threading
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import openai
@@ -13,6 +14,8 @@ from utils.timezone_utils import (
     today_in_configured_timezone,
     today_iso_in_configured_timezone,
 )
+
+load_dotenv()
 
 _logger = logging.getLogger(__name__)
 
@@ -602,22 +605,33 @@ def build_message(tasks):
     return f"{DEFAULT_PROMPT}{task_lines}"
 
 
+_openai_client_lock = threading.Lock()
+_openai_client_instance: openai.OpenAI | None = None
+
+
 def _create_openai_client():
-    load_dotenv()
-    openai_api_key = os.getenv("OPENAI_KEY")
-    if not openai_api_key:
-        raise ValueError("Missing required environment variable: OPENAI_KEY")
-    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
-    return openai.OpenAI(api_key=openai_api_key, timeout=timeout_seconds)
+    """Return a shared OpenAI client, creating it on first call."""
+    global _openai_client_instance
+    if _openai_client_instance is not None:
+        return _openai_client_instance
+    with _openai_client_lock:
+        if _openai_client_instance is not None:
+            return _openai_client_instance
+        openai_api_key = os.getenv("OPENAI_KEY")
+        if not openai_api_key:
+            raise ValueError("Missing required environment variable: OPENAI_KEY")
+        timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+        _openai_client_instance = openai.OpenAI(
+            api_key=openai_api_key, timeout=timeout_seconds,
+        )
+        return _openai_client_instance
 
 
 def _get_llm_model():
-    load_dotenv()
     llm_model = str(os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)).strip()
     return llm_model or DEFAULT_LLM_MODEL
 
 
 def _get_audio_transcribe_model():
-    load_dotenv()
     transcribe_model = str(os.getenv("AUDIO_TRANSCRIBE_MODEL", DEFAULT_AUDIO_TRANSCRIBE_MODEL)).strip()
     return transcribe_model or DEFAULT_AUDIO_TRANSCRIBE_MODEL
