@@ -536,7 +536,9 @@
           },
           "attendees": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {
+              "type": "string"
+            },
             "description": "Lista de emails a convidar para o evento. Use sempre que o usuário mencionar convidar alguém ou adicionar participantes."
           },
           "confirmed": {
@@ -1341,7 +1343,9 @@
             "description": "Nome do arquivo a ser lido (ex: 'about-me.md', 'health.md'). Deve terminar com .md."
           }
         },
-        "required": ["file_name"]
+        "required": [
+          "file_name"
+        ]
       },
       "handler": "assistant_connector.tools.memory_tools:read_memory_file"
     },
@@ -1361,16 +1365,80 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["append", "replace"],
+            "enum": [
+              "append",
+              "replace"
+            ],
             "description": "'append' adiciona ao final do arquivo (padrão). 'replace' substitui o conteúdo completo."
           }
         },
-        "required": ["file_name", "content"]
+        "required": [
+          "file_name",
+          "content"
+        ]
       },
       "handler": "assistant_connector.tools.memory_tools:edit_memory_file",
       "write_operation": true,
       "prompt_guidance": "Use edit_memory_file para salvar informações persistentes sobre o usuário que devem ser lembradas em conversas futuras. Sempre leia o arquivo com read_memory_file antes de substituir (mode='replace') para não perder dados. Prefira mode='append' para adicionar informações novas. Crie arquivos temáticos (health.md, work.md, preferences.md) para organizar melhor. Nunca salve credenciais ou dados sensíveis em memórias.",
       "guidance_priority": 20
+    },
+    {
+      "name": "list_user_files",
+      "description": "Lista todos os arquivos enviados pelo usuário. Retorna nome, tamanho, contexto e data de upload de cada arquivo.",
+      "handler": "assistant_connector.tools.file_tools:list_user_files",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_file_content",
+      "description": "Extrai e retorna o conteúdo textual de um arquivo armazenado do usuário. Suporta PDF, TXT, CSV, MD e DOCX.",
+      "handler": "assistant_connector.tools.file_tools:read_file_content",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "ID do arquivo retornado por list_user_files."
+          },
+          "max_chars": {
+            "type": "integer",
+            "description": "Número máximo de caracteres a retornar (padrão: 8000)."
+          }
+        },
+        "required": [
+          "file_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_user_file",
+      "description": "Remove um arquivo armazenado do usuário do sistema.",
+      "handler": "assistant_connector.tools.file_tools:delete_user_file",
+      "write_operation": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "description": "ID do arquivo a ser deletado."
+          },
+          "confirmed": {
+            "type": "boolean",
+            "description": "Use true apenas quando o usuário confirmar explicitamente a exclusão."
+          }
+        },
+        "required": [
+          "file_id"
+        ],
+        "additionalProperties": false
+      }
     }
   ],
   "agents": [
@@ -1421,7 +1489,10 @@
         "manage_user_credentials",
         "list_memory_files",
         "read_memory_file",
-        "edit_memory_file"
+        "edit_memory_file",
+        "list_user_files",
+        "read_file_content",
+        "delete_user_file"
       ]
     }
   ]

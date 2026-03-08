@@ -1,3 +1,4 @@
+import logging
 import os
 import datetime
 import json
@@ -13,6 +14,7 @@ from utils.timezone_utils import (
     today_iso_in_configured_timezone,
 )
 
+_logger = logging.getLogger(__name__)
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_AUDIO_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
@@ -113,15 +115,62 @@ DAY_SUMMARY_PROMPT = (
 )
 
 
+class OpenAICallError(Exception):
+    """Raised when an OpenAI API call fails after handling."""
+
+    def __init__(self, message: str, original: Exception | None = None):
+        super().__init__(message)
+        self.original = original
+
+
+def _safe_openai_call(callable_fn, *, description: str = "OpenAI API call"):
+    """Execute *callable_fn* and translate openai exceptions into OpenAICallError."""
+    try:
+        return callable_fn()
+    except openai.APITimeoutError as exc:
+        _logger.error("%s timed out: %s", description, exc)
+        raise OpenAICallError(
+            f"O serviço de IA demorou demais para responder (timeout). Tente novamente.",
+            original=exc,
+        ) from exc
+    except openai.RateLimitError as exc:
+        _logger.warning("%s rate-limited: %s", description, exc)
+        raise OpenAICallError(
+            f"Limite de requisições à IA atingido. Aguarde alguns segundos e tente novamente.",
+            original=exc,
+        ) from exc
+    except openai.AuthenticationError as exc:
+        _logger.error("%s authentication failed: %s", description, exc)
+        raise OpenAICallError(
+            f"Falha de autenticação com o serviço de IA. Verifique a chave OPENAI_KEY.",
+            original=exc,
+        ) from exc
+    except openai.APIConnectionError as exc:
+        _logger.error("%s connection error: %s", description, exc)
+        raise OpenAICallError(
+            f"Não foi possível conectar ao serviço de IA. Verifique a conexão com a internet.",
+            original=exc,
+        ) from exc
+    except openai.APIStatusError as exc:
+        _logger.error("%s API status error (HTTP %s): %s", description, exc.status_code, exc)
+        raise OpenAICallError(
+            f"Erro no serviço de IA (HTTP {exc.status_code}). Tente novamente.",
+            original=exc,
+        ) from exc
+
+
 def call_openai_assistant(tasks, project_logger):
     openai_client = _create_openai_client()
     llm_model = _get_llm_model()
 
     project_logger.info("Calling ChatGPT. This can take a while...")
 
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=build_message(tasks),
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=build_message(tasks),
+        ),
+        description="call_openai_assistant",
     )
 
     answer = completion.output_text
@@ -134,13 +183,16 @@ def parse_add_task_input(user_input, project_logger):
     llm_model = _get_llm_model()
 
     project_logger.info("Calling LLM to parse add_task input...")
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=(
-            f"{TASK_PARSER_PROMPT}\n\n"
-            f"{_build_temporal_prompt_context()}\n\n"
-            f"Input do usuário:\n{user_input}"
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=(
+                f"{TASK_PARSER_PROMPT}\n\n"
+                f"{_build_temporal_prompt_context()}\n\n"
+                f"Input do usuário:\n{user_input}"
+            ),
         ),
+        description="parse_add_task_input",
     )
     return parse_add_task_output(completion.output_text)
 
@@ -153,9 +205,12 @@ def summarize_calendar_events(events, project_logger):
     llm_model = _get_llm_model()
 
     project_logger.info("Calling LLM to summarize calendar events...")
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=build_calendar_events_prompt(events),
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=build_calendar_events_prompt(events),
+        ),
+        description="summarize_calendar_events",
     )
     return completion.output_text
 
@@ -166,15 +221,18 @@ def parse_add_event_input(user_input, project_logger):
     default_timezone = _get_default_event_timezone()
 
     project_logger.info("Calling LLM to parse add_event input...")
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=(
-            f"{EVENT_PARSER_PROMPT}\n"
-            f"\nDefault timezone para este usuário: {default_timezone}."
-            f"\nSe timezone não for informado pelo usuário, use exatamente {default_timezone}.\n\n"
-            f"{_build_temporal_prompt_context()}\n\n"
-            f"Input do usuário:\n{user_input}"
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=(
+                f"{EVENT_PARSER_PROMPT}\n"
+                f"\nDefault timezone para este usuário: {default_timezone}."
+                f"\nSe timezone não for informado pelo usuário, use exatamente {default_timezone}.\n\n"
+                f"{_build_temporal_prompt_context()}\n\n"
+                f"Input do usuário:\n{user_input}"
+            ),
         ),
+        description="parse_add_event_input",
     )
     return parse_add_event_output(completion.output_text)
 
@@ -184,9 +242,12 @@ def parse_add_note_input(user_input, project_logger):
     llm_model = _get_llm_model()
 
     project_logger.info("Calling LLM to parse add_note input...")
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=f"{NOTE_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=f"{NOTE_PARSER_PROMPT}\n\nInput do usuário:\n{user_input}",
+        ),
+        description="parse_add_note_input",
     )
     return parse_add_note_output(completion.output_text)
 
@@ -203,9 +264,12 @@ def transcribe_audio_input(audio_bytes, filename, mime_type, project_logger):
     safe_mime_type = str(mime_type or "application/octet-stream").strip() or "application/octet-stream"
 
     project_logger.info("Calling LLM to transcribe audio input...")
-    transcription = openai_client.audio.transcriptions.create(
-        model=transcribe_model,
-        file=(safe_filename, audio_bytes, safe_mime_type),
+    transcription = _safe_openai_call(
+        lambda: openai_client.audio.transcriptions.create(
+            model=transcribe_model,
+            file=(safe_filename, audio_bytes, safe_mime_type),
+        ),
+        description="transcribe_audio_input",
     )
 
     transcript_text = str(getattr(transcription, "text", "") or "").strip()
@@ -228,9 +292,12 @@ def summarize_period_context(period_label, tasks, events, project_logger):
     llm_model = _get_llm_model()
 
     project_logger.info("Calling LLM to summarize %s context...", period_label)
-    completion = openai_client.responses.create(
-        model=llm_model,
-        input=build_period_summary_prompt(period_label, tasks, events),
+    completion = _safe_openai_call(
+        lambda: openai_client.responses.create(
+            model=llm_model,
+            input=build_period_summary_prompt(period_label, tasks, events),
+        ),
+        description=f"summarize_period_context({period_label})",
     )
     return completion.output_text
 
@@ -540,7 +607,8 @@ def _create_openai_client():
     openai_api_key = os.getenv("OPENAI_KEY")
     if not openai_api_key:
         raise ValueError("Missing required environment variable: OPENAI_KEY")
-    return openai.OpenAI(api_key=openai_api_key)
+    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+    return openai.OpenAI(api_key=openai_api_key, timeout=timeout_seconds)
 
 
 def _get_llm_model():

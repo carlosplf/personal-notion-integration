@@ -449,6 +449,52 @@ def create_telegram_application(project_logger=None):
             logger.exception("Error running assistant chat for audio input")
             await message.reply_text(build_error_response(error))
 
+    async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not user or user.is_bot:
+            return
+        if not _is_authorized_telegram_user(user.id, allowed_user_ids):
+            logger.warning("Unauthorized document upload by user_id=%s username=@%s", user.id, user.username)
+            await update.effective_message.reply_text(ACCESS_DENIED_MESSAGE)
+            return
+
+        message = update.effective_message
+        document = message.document
+        if not document:
+            return
+
+        try:
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action=ChatAction.TYPING
+            )
+            tg_file = await context.bot.get_file(document.file_id)
+            file_bytes = bytes(await tg_file.download_as_bytearray())
+        except Exception as error:
+            logger.exception("Error downloading document")
+            await message.reply_text(build_error_response(error))
+            return
+
+        filename = document.file_name or "arquivo"
+        mime_type = document.mime_type or ""
+        caption = message.caption or ""
+
+        try:
+            service = get_assistant_service()
+            answer = await asyncio.to_thread(
+                service.handle_file_upload,
+                user_id=str(user.id),
+                channel_id=str(update.effective_chat.id),
+                guild_id=None,
+                filename=filename,
+                file_bytes=file_bytes,
+                mime_type=mime_type,
+                caption=caption,
+            )
+            await _send_formatted_response(message.reply_text, build_bot_response(answer))
+        except Exception as error:
+            logger.exception("Error handling document upload")
+            await message.reply_text(build_error_response(error))
+
     async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not user or user.is_bot:
@@ -568,6 +614,7 @@ def create_telegram_application(project_logger=None):
     application.add_handler(CommandHandler("new_chat", reset_handler))
     application.add_handler(CommandHandler("setup", setup_handler))
     application.add_handler(CommandHandler("google_auth", google_auth_handler))
+    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, audio_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     application.assistant_scheduler_runner_getter = _get_scheduler_runner

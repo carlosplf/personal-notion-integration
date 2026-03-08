@@ -3,11 +3,8 @@ import unittest.mock
 import tempfile
 import os
 import datetime
-import sys
 import types
 
-sys.modules.setdefault("openai", types.SimpleNamespace(ChatCompletion=None))
-sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
 from openai_connector import llm_api
 
 
@@ -359,6 +356,95 @@ class TestOpenAIConnector(unittest.TestCase):
     def test_infer_note_tag_covers_bug_and_fallback(self):
         self.assertEqual(llm_api._infer_note_tag("Erro crítico no deploy"), "BUG")
         self.assertEqual(llm_api._infer_note_tag("tema neutro sem palavras-chave"), "GENERAL")
+
+
+class TestSafeOpenAICall(unittest.TestCase):
+    """Tests for _safe_openai_call error handling wrapper."""
+
+    def test_returns_result_on_success(self):
+        result = llm_api._safe_openai_call(lambda: "ok", description="test")
+        self.assertEqual(result, "ok")
+
+    def _raise(self, exc):
+        """Helper: return a callable that raises *exc*."""
+        def _fn():
+            raise exc
+        return _fn
+
+    def test_wraps_timeout_error(self):
+        from openai import APITimeoutError
+        exc = APITimeoutError(request=unittest.mock.Mock())
+        with self.assertRaises(llm_api.OpenAICallError) as ctx:
+            llm_api._safe_openai_call(self._raise(exc), description="test")
+        self.assertIn("timeout", str(ctx.exception).lower())
+        self.assertIs(ctx.exception.original, exc)
+
+    def test_wraps_rate_limit_error(self):
+        from openai import RateLimitError
+        mock_response = unittest.mock.Mock()
+        mock_response.status_code = 429
+        mock_response.headers = {}
+        exc = RateLimitError(
+            message="rate limited", response=mock_response, body=None,
+        )
+        with self.assertRaises(llm_api.OpenAICallError) as ctx:
+            llm_api._safe_openai_call(self._raise(exc), description="test")
+        self.assertIn("Limite", str(ctx.exception))
+
+    def test_wraps_authentication_error(self):
+        from openai import AuthenticationError
+        mock_response = unittest.mock.Mock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        exc = AuthenticationError(
+            message="bad key", response=mock_response, body=None,
+        )
+        with self.assertRaises(llm_api.OpenAICallError) as ctx:
+            llm_api._safe_openai_call(self._raise(exc), description="test")
+        self.assertIn("autenticação", str(ctx.exception).lower())
+
+    def test_wraps_connection_error(self):
+        from openai import APIConnectionError
+        exc = APIConnectionError(request=unittest.mock.Mock())
+        with self.assertRaises(llm_api.OpenAICallError) as ctx:
+            llm_api._safe_openai_call(self._raise(exc), description="test")
+        self.assertIn("conectar", str(ctx.exception).lower())
+
+    def test_wraps_api_status_error(self):
+        from openai import InternalServerError
+        mock_response = unittest.mock.Mock()
+        mock_response.status_code = 500
+        mock_response.headers = {}
+        exc = InternalServerError(
+            message="server error", response=mock_response, body=None,
+        )
+        with self.assertRaises(llm_api.OpenAICallError) as ctx:
+            llm_api._safe_openai_call(self._raise(exc), description="test")
+        self.assertIn("500", str(ctx.exception))
+
+    def test_call_openai_assistant_raises_openai_call_error_on_failure(self):
+        from openai import APITimeoutError
+        exc = APITimeoutError(request=unittest.mock.Mock())
+        fake_client = unittest.mock.Mock()
+        fake_client.responses.create.side_effect = exc
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), \
+             unittest.mock.patch.dict(os.environ, {"LLM_MODEL": "gpt-test"}, clear=False):
+            with self.assertRaises(llm_api.OpenAICallError):
+                llm_api.call_openai_assistant([], unittest.mock.Mock())
+
+    def test_transcribe_audio_raises_openai_call_error_on_failure(self):
+        from openai import RateLimitError
+        exc = RateLimitError(
+            message="rate limited",
+            response=unittest.mock.Mock(status_code=429, headers={}),
+            body=None,
+        )
+        fake_client = unittest.mock.Mock()
+        fake_client.audio.transcriptions.create.side_effect = exc
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), \
+             unittest.mock.patch.dict(os.environ, {"AUDIO_TRANSCRIBE_MODEL": "gpt-test"}, clear=False):
+            with self.assertRaises(llm_api.OpenAICallError):
+                llm_api.transcribe_audio_input(b"audio", "test.ogg", "audio/ogg", unittest.mock.Mock())
 
 
 if __name__ == "__main__":

@@ -51,6 +51,9 @@ class _FakeFilters:
     VOICE = _FakeFilterExpr("VOICE")
     AUDIO = _FakeFilterExpr("AUDIO")
 
+    class Document:
+        ALL = _FakeFilterExpr("DOCUMENT_ALL")
+
 
 class _FakeBot:
     def __init__(self):
@@ -347,7 +350,7 @@ class TestTelegramBot(unittest.TestCase):
             app = telegram_bot.create_telegram_application(project_logger=unittest.mock.Mock())
 
         self.assertEqual(app._token, "token-x")
-        self.assertEqual(len(app.handlers), 6)
+        self.assertEqual(len(app.handlers), 7)
         self.assertTrue(callable(app.assistant_scheduler_runner_getter))
 
         google_auth_handler = [h[2] for h in app.handlers if h[0] == "command" and h[1] == "google_auth"][0]

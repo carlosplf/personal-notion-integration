@@ -41,3 +41,4 @@ class ToolExecutionContext:
     available_agents: list[dict[str, Any]]
     user_credential_store: Any = None  # UserCredentialStore | None
     memories_dir: str | None = None
+    file_store: Any = None  # FileStore | None

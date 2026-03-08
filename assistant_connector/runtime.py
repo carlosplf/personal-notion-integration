@@ -77,6 +77,7 @@ class AssistantRuntime:
         max_user_memory_chars: int = 3000,
         openai_client=None,
         user_credential_store=None,
+        file_store=None,
     ):
         self._agent = agent
         self._tool_registry = tool_registry
@@ -98,6 +99,7 @@ class AssistantRuntime:
         self._max_user_memory_chars = max(500, int(max_user_memory_chars))
         self._openai_client = openai_client or self._create_openai_client()
         self._user_credential_store = user_credential_store
+        self._file_store = file_store
 
     def process_user_message(
         self,
@@ -134,6 +136,7 @@ class AssistantRuntime:
             available_agents=self._available_agents,
             user_credential_store=self._user_credential_store,
             memories_dir=user_memories_dir,
+            file_store=self._file_store,
         )
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(

@@ -7,14 +7,16 @@ import os
 from dotenv import load_dotenv
 
 from assistant_connector.config_loader import load_assistant_configuration
+from assistant_connector.file_store import FileStore, ACCEPTED_EXTENSIONS, ACCEPTED_EXTENSIONS_DISPLAY
 from assistant_connector.memory_store import ConversationMemoryStore
 from assistant_connector.runtime import AssistantRuntime, _load_memories_from_dir
 from assistant_connector.tool_registry import ToolRegistry
 
 
 class AssistantService:
-    def __init__(self, runtime: AssistantRuntime):
+    def __init__(self, runtime: AssistantRuntime, file_store: FileStore | None = None):
         self._runtime = runtime
+        self._file_store = file_store
 
     def chat(
         self,
@@ -50,6 +52,58 @@ class AssistantService:
             guild_id=guild_id,
         )
         self._runtime.reset_session(session_id=session_id)
+
+    def handle_file_upload(
+        self,
+        *,
+        user_id: str,
+        channel_id: str,
+        guild_id: str | None,
+        filename: str,
+        file_bytes: bytes,
+        mime_type: str = "",
+        caption: str = "",
+    ) -> str:
+        """
+        Validate and store an uploaded file, then notify the assistant so it can
+        acknowledge the upload in context.
+
+        Returns the assistant's response text, or an error message if the format
+        is not accepted.
+        """
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in ACCEPTED_EXTENSIONS:
+            return (
+                f"❌ O formato *{ext or 'desconhecido'}* não é aceito pelo sistema.\n"
+                f"Formatos suportados: {ACCEPTED_EXTENSIONS_DISPLAY}"
+            )
+
+        if self._file_store is None:
+            return "❌ O gerenciamento de arquivos não está configurado neste ambiente."
+
+        try:
+            record = self._file_store.save_file(
+                user_id=str(user_id),
+                original_name=filename,
+                file_bytes=file_bytes,
+                mime_type=mime_type,
+                context_description=caption,
+            )
+        except ValueError as exc:
+            return f"❌ {exc}"
+
+        context_note = f" Contexto informado: \"{caption}\"." if caption.strip() else ""
+        notification = (
+            f"[Sistema] Arquivo '{filename}' foi enviado pelo usuário e armazenado com sucesso. "
+            f"ID do arquivo: {record['file_id']}. Tamanho: {record['file_size']} bytes.{context_note} "
+            f"Confirme o recebimento para o usuário e informe o que pode fazer com ele."
+        )
+        return self.chat(
+            user_id=user_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            message=notification,
+        )
 
     def schedule_chat(
         self,
@@ -303,6 +357,16 @@ def create_assistant_service(
         max_message_chars=max_message_chars,
         max_tool_payload_chars=max_tool_payload_chars,
     )
+    default_files_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "files")
+    )
+    files_dir = os.getenv("ASSISTANT_FILES_DIR", default_files_dir)
+    max_file_size_mb = _get_env_int("ASSISTANT_MAX_FILE_SIZE_MB", 20, minimum=1)
+    file_store = FileStore(
+        db_path=resolved_memory_path,
+        files_dir=files_dir,
+        max_file_size_bytes=max_file_size_mb * 1024 * 1024,
+    )
     tool_registry = ToolRegistry(configuration.tools)
     runtime = AssistantRuntime(
         agent=selected_agent,
@@ -319,8 +383,9 @@ def create_assistant_service(
         max_user_memory_chars=max_user_memory_chars,
         openai_client=openai_client,
         user_credential_store=user_credential_store,
+        file_store=file_store,
     )
-    return AssistantService(runtime=runtime)
+    return AssistantService(runtime=runtime, file_store=file_store)
 
 
 def _build_agent_summaries(agent_summaries, model_override):
