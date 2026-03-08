@@ -323,6 +323,43 @@ class TestOpenAIConnector(unittest.TestCase):
         self.assertIn("Sem tarefas e sem eventos para esta semana", summary)
         mocked_client.assert_not_called()
 
+    def test_parse_add_event_input_uses_default_timezone_and_llm_model(self):
+        fake_client = _FakeOpenAIClient(
+            '{"summary":"Kickoff","start_datetime":"2026-03-06T10:00","end_datetime":"2026-03-06T11:00","description":"","timezone":"America/Sao_Paulo"}'
+        )
+        with unittest.mock.patch.object(llm_api, "_create_openai_client", return_value=fake_client), unittest.mock.patch.object(
+            llm_api, "_get_default_event_timezone", return_value="America/Sao_Paulo"
+        ), unittest.mock.patch.dict(os.environ, {"LLM_MODEL": "gpt-5-mini"}, clear=False):
+            parsed = llm_api.parse_add_event_input(
+                "marcar kickoff amanhã às 10h",
+                project_logger=types.SimpleNamespace(info=lambda *args, **kwargs: None),
+            )
+        self.assertEqual(parsed["summary"], "Kickoff")
+        self.assertEqual(fake_client.responses.calls[0]["model"], "gpt-5-mini")
+        prompt_input = fake_client.responses.calls[0]["input"]
+        self.assertIn("Default timezone para este usuário: America/Sao_Paulo.", prompt_input)
+        self.assertIn("Input do usuário:\nmarcar kickoff amanhã às 10h", prompt_input)
+
+    def test_parse_add_event_output_rejects_end_before_start(self):
+        with self.assertRaises(ValueError):
+            llm_api.parse_add_event_output(
+                '{"summary":"Kickoff","start_datetime":"2026-03-06T11:00","end_datetime":"2026-03-06T10:00","description":"","timezone":"America/Sao_Paulo"}'
+            )
+
+    def test_extract_json_payload_reads_json_wrapped_in_text(self):
+        payload = llm_api._extract_json_payload(
+            "resposta:\n```json\n{\"task_name\":\"A\",\"project\":\"Pessoal\",\"due_date\":\"2026-03-01\",\"tags\":[]}\n```"
+        )
+        self.assertEqual(payload["task_name"], "A")
+
+    def test_extract_json_payload_raises_when_json_missing(self):
+        with self.assertRaises(ValueError):
+            llm_api._extract_json_payload("sem json aqui")
+
+    def test_infer_note_tag_covers_bug_and_fallback(self):
+        self.assertEqual(llm_api._infer_note_tag("Erro crítico no deploy"), "BUG")
+        self.assertEqual(llm_api._infer_note_tag("tema neutro sem palavras-chave"), "GENERAL")
+
 
 if __name__ == "__main__":
     unittest.main()

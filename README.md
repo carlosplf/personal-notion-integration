@@ -145,6 +145,18 @@ Google (Gmail + Calendar) credentials are managed automatically via `/google_aut
 python run.py
 ```
 
+## Tests
+
+Run the full suite:
+
+```sh
+./env/bin/python -m pytest -q
+```
+
+Testing guardrails:
+- External network/API calls are blocked by default during tests (`tests/conftest.py`).
+- Coverage is enforced with a minimum of **80%** on core runtime/integration modules via `pytest.ini`.
+
 ## Telegram commands and conversational mode
 
 The bot works entirely through natural language messages in Telegram. There are no slash commands to memorize — just talk to it.

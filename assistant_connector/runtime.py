@@ -22,7 +22,9 @@ _NEGATIVE_CONFIRMATION_RE = re.compile(
     r"\b(n[aã]o|nao|jamais|nunca)\s+(confirmo|confirmar|confirme|autorizar|autorize|enviar|mande|executar)\b"
 )
 _EXPLICIT_CONFIRMATION_RE = re.compile(
-    r"\b(confirmo|confirmar|confirmado|confirme|autorizo|autorizar|autorize|pode enviar|pode mandar|pode executar|pode prosseguir)\b"
+    r"\b(confirmo|confirmar|confirmado|confirme|autorizo|autorizar|autorize|"
+    r"pode enviar|pode mandar|pode executar|pode prosseguir|"
+    r"envie|enviar|mande|mandar|executa|execute|faca|faça|prosseguir)\b"
 )
 
 
@@ -538,7 +540,10 @@ class AssistantRuntime:
         if style_guide:
             lines.append(f"- Guia de estilo: {style_guide}")
         if signature:
-            lines.append(f"- Assinatura padrão:\n{signature}")
+            lines.append(
+                "- A assinatura de email é aplicada automaticamente pela ferramenta send_email; "
+                "não inclua assinatura manualmente no corpo."
+            )
         lines.append(
             "- Ao usar send_email, defina o assunto você mesmo e só envie se o destinatário "
             "tiver sido informado explicitamente pelo usuário."

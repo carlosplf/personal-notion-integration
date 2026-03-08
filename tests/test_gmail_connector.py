@@ -2,6 +2,8 @@ import unittest
 import os
 import json
 import base64
+import io
+import zipfile
 from email import message_from_bytes
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -467,6 +469,116 @@ class TestGmailConnector(unittest.TestCase):
 
         self.assertEqual(result["filename"], "Plano Analise.docx")
         self.assertEqual(result["content_preview"], "resumo inline")
+
+    def test_extract_message_body_prefers_plain_text_part(self):
+        payload = {
+            "parts": [
+                {
+                    "mimeType": "text/html",
+                    "body": {"data": base64.urlsafe_b64encode(b"<b>html</b>").decode()},
+                },
+                {
+                    "mimeType": "text/plain",
+                    "body": {"data": base64.urlsafe_b64encode(b"texto simples").decode()},
+                },
+            ]
+        }
+        self.assertEqual(gmail_connector._extract_message_body(payload), "texto simples")
+
+    def test_extract_message_body_falls_back_to_nested_text(self):
+        payload = {
+            "parts": [
+                {
+                    "mimeType": "multipart/alternative",
+                    "parts": [
+                        {
+                            "mimeType": "text/plain",
+                            "body": {"data": base64.urlsafe_b64encode(b"texto interno").decode()},
+                        }
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(gmail_connector._extract_message_body(payload), "texto interno")
+
+    def test_extract_attachment_text_rejects_unsupported_format(self):
+        with self.assertRaises(ValueError):
+            gmail_connector._extract_attachment_text(
+                b"binary-data",
+                filename="arquivo.bin",
+                mime_type="application/octet-stream",
+            )
+
+    def test_extract_xlsx_text_reads_shared_strings_and_numeric_cells(self):
+        shared_strings_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<si><t>Projeto</t></si>'
+            "</sst>"
+        )
+        sheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row>'
+            '<c r="A1" t="s"><v>0</v></c>'
+            '<c r="B1"><v>42</v></c>'
+            "</row></sheetData></worksheet>"
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("xl/sharedStrings.xml", shared_strings_xml)
+            archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+
+        extracted = gmail_connector._extract_xlsx_text(buffer.getvalue())
+        self.assertIn("Projeto", extracted)
+        self.assertIn("42", extracted)
+
+    @patch("gmail_connector.gmail_connector.gmail_connect")
+    @patch("gmail_connector.gmail_connector.build_email_body")
+    @patch("gmail_connector.gmail_connector.load_credentials.load_email_config")
+    def test_send_email_with_tasks_fake_send_skips_gmail_api(
+        self,
+        mock_load_email_config,
+        mock_build_email_body,
+        mock_gmail_connect,
+    ):
+        mock_load_email_config.return_value = {
+            "display_name": "Carlos",
+            "email_to": "to@example.com",
+            "email_from": "from@example.com",
+        }
+        mock_build_email_body.return_value = "<p>Resumo</p>"
+
+        result = gmail_connector.send_email_with_tasks(
+            all_tasks=[{"name": "Task"}],
+            chatgpt_answer="Resumo",
+            project_logger=_MockLogger(),
+            fake_send=True,
+        )
+
+        self.assertTrue(result)
+        mock_gmail_connect.assert_not_called()
+
+    @patch("gmail_connector.gmail_connector.load_credentials.load_email_config")
+    @patch("gmail_connector.gmail_connector.build_email_body")
+    def test_send_email_with_tasks_returns_none_when_body_generation_fails(
+        self,
+        mock_build_email_body,
+        mock_load_email_config,
+    ):
+        mock_load_email_config.return_value = {
+            "display_name": "Carlos",
+            "email_to": "to@example.com",
+            "email_from": "from@example.com",
+        }
+        mock_build_email_body.return_value = False
+
+        result = gmail_connector.send_email_with_tasks(
+            all_tasks=[{"name": "Task"}],
+            chatgpt_answer="Resumo",
+            project_logger=_MockLogger(),
+            fake_send=False,
+        )
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

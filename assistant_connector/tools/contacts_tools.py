@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import csv
 import os
+import re
+import unicodedata
 
 
 CONTACTS_CSV_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "memories", "contacts.csv")
 )
 REQUIRED_COLUMNS = ("Nome", "email", "telefone", "relacionamento")
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _resolve_contacts_path(context) -> str:
@@ -42,14 +45,20 @@ def search_contacts(arguments, context):
     contacts_path = _resolve_contacts_path(context)
     contacts = _read_contacts_csv(contacts_path)
     if query:
-        contacts = [
-            contact
-            for contact in contacts
-            if query in contact["Nome"].lower()
-            or query in contact["email"].lower()
-            or query in contact["telefone"].lower()
-            or query in contact["relacionamento"].lower()
-        ]
+        scored_contacts = []
+        for contact in contacts:
+            score = _score_contact_for_query(contact, query)
+            if score > 0:
+                scored_contacts.append((score, contact))
+        scored_contacts.sort(
+            key=lambda item: (
+                item[0],
+                item[1].get("Nome", "").lower(),
+                item[1].get("email", "").lower(),
+            ),
+            reverse=True,
+        )
+        contacts = [contact for _, contact in scored_contacts]
 
     return {
         "total": len(contacts),
@@ -83,6 +92,65 @@ def _read_contacts_csv(contacts_path: str = CONTACTS_CSV_PATH):
                 }
             )
         return contacts
+
+
+def resolve_contact_email(query, context, *, raise_on_ambiguous=True):
+    clean_query = str(query or "").strip()
+    if not clean_query:
+        raise ValueError("recipient query is required")
+
+    if _looks_like_email(clean_query):
+        return {
+            "email": clean_query,
+            "source": "explicit_email",
+            "contact": None,
+        }
+
+    contacts_path = _resolve_contacts_path(context)
+    contacts = _read_contacts_csv(contacts_path)
+    scored_contacts = []
+    for contact in contacts:
+        email = str(contact.get("email", "")).strip()
+        if not _looks_like_email(email):
+            continue
+        score = _score_contact_for_query(contact, clean_query)
+        if score > 0:
+            scored_contacts.append((score, contact))
+    if not scored_contacts:
+        raise ValueError(
+            "Could not resolve recipient from contacts.csv. "
+            "Use a full email address or a more specific contact query."
+        )
+
+    scored_contacts.sort(
+        key=lambda item: (
+            item[0],
+            item[1].get("Nome", "").lower(),
+            item[1].get("email", "").lower(),
+        ),
+        reverse=True,
+    )
+    top_score = scored_contacts[0][0]
+    top_contacts = [contact for score, contact in scored_contacts if score == top_score]
+    top_emails = sorted({str(contact.get("email", "")).strip() for contact in top_contacts if contact.get("email")})
+    if len(top_emails) == 1:
+        selected = next(contact for contact in top_contacts if str(contact.get("email", "")).strip() == top_emails[0])
+        return {
+            "email": top_emails[0],
+            "source": "contacts_csv",
+            "contact": selected,
+        }
+
+    if raise_on_ambiguous:
+        options = "; ".join(
+            f"{str(contact.get('Nome', '')).strip()} <{str(contact.get('email', '')).strip()}>"
+            for contact in top_contacts[:5]
+        )
+        raise ValueError(
+            "recipient query is ambiguous. Matches: "
+            f"{options}. Please specify the contact name or exact email."
+        )
+    return None
 
 
 def register_contact_memory(arguments, context):
@@ -120,3 +188,64 @@ def _append_contact_csv(csv_path: str, contact_row: dict[str, str]) -> None:
         if needs_header:
             writer.writeheader()
         writer.writerow(contact_row)
+
+
+def _score_contact_for_query(contact: dict[str, str], query: str) -> int:
+    normalized_query = _normalize_text(query)
+    query_tokens = set(_tokenize(normalized_query))
+    if not query_tokens:
+        return 0
+
+    name = _normalize_text(contact.get("Nome", ""))
+    email = _normalize_text(contact.get("email", ""))
+    phone = _normalize_text(contact.get("telefone", ""))
+    relationship = _normalize_text(contact.get("relacionamento", ""))
+    searchable = f"{name} {email} {phone} {relationship}".strip()
+
+    score = 0
+    if normalized_query == email:
+        score += 500
+    if normalized_query and normalized_query in searchable:
+        score += 80
+    if normalized_query and normalized_query in name:
+        score += 120
+    if normalized_query and normalized_query in relationship:
+        score += 130
+    if normalized_query and normalized_query in email:
+        score += 160
+
+    for token in query_tokens:
+        if token in name:
+            score += 30
+        if token in relationship:
+            score += 40
+        if token in email:
+            score += 50
+        if token in phone:
+            score += 10
+
+    personal_tokens = {"pessoal", "personal", "meu", "minha", "proprio", "propria", "proprio", "eu"}
+    professional_tokens = {"profissional", "trabalho", "work", "empresa", "corporativo"}
+    query_has_personal = any(token in query_tokens for token in personal_tokens)
+    query_has_professional = any(token in query_tokens for token in professional_tokens)
+    relationship_tokens = set(_tokenize(relationship))
+    if query_has_personal and relationship_tokens.intersection({"pessoal", "personal", "esposa", "familia", "minha", "meu"}):
+        score += 120
+    if query_has_professional and relationship_tokens.intersection({"profissional", "trabalho", "empresa", "socio", "cto", "ceo"}):
+        score += 120
+
+    return score
+
+
+def _normalize_text(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    normalized = unicodedata.normalize("NFKD", raw)
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _tokenize(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", str(value or ""))
+
+
+def _looks_like_email(value: str) -> bool:
+    return bool(_EMAIL_PATTERN.fullmatch(str(value or "").strip()))

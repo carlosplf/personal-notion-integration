@@ -196,6 +196,14 @@ def build_error_response(_error=None):
     return "⚠️ Ocorreu um erro ao processar sua solicitação. Tente novamente."
 
 
+def _resolve_scheduled_delivery_chat_id(task):
+    task_payload = task or {}
+    channel_id = str(task_payload.get("channel_id", "")).strip()
+    if channel_id:
+        return channel_id
+    return str(task_payload.get("user_id", "")).strip()
+
+
 def _build_setup_trigger_message(user_id: str, credential_store) -> str:
     """Build the trigger message sent to the LLM when the user runs /setup."""
     from assistant_connector.user_credential_store import _INTEGRATION_REQUIREMENTS
@@ -311,7 +319,7 @@ def create_telegram_application(project_logger=None):
         response_text = str(outcome.get("response_text", "")).strip()
         if not response_text:
             return
-        notify_chat_id = str(task.get("user_id", "")).strip()
+        notify_chat_id = _resolve_scheduled_delivery_chat_id(task)
         if not notify_chat_id:
             return
 

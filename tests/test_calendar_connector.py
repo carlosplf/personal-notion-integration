@@ -9,6 +9,9 @@ from calendar_connector import calendar_connector
 
 
 class _MockLogger:
+    def debug(self, *_args, **_kwargs):
+        return None
+
     def warning(self, *_args, **_kwargs):
         return None
 
@@ -38,6 +41,18 @@ class _FakeEventsService:
                         "end": {"dateTime": "2026-03-10T11:00:00Z"},
                     }
                 ]
+            }
+        )
+
+    def insert(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeExecute(
+            {
+                "id": "created-id",
+                "summary": kwargs["body"]["summary"],
+                "start": {"dateTime": kwargs["body"]["start"]["dateTime"]},
+                "end": {"dateTime": kwargs["body"]["end"]["dateTime"]},
+                "htmlLink": "https://calendar.google.com/event?eid=created-id",
             }
         )
 
@@ -147,6 +162,75 @@ class TestCalendarConnector(unittest.TestCase):
         call_kwargs = fake_service.events().calls[0]
         self.assertEqual(call_kwargs["timeMin"], "2026-03-01T03:00:00Z")
         self.assertEqual(call_kwargs["timeMax"], "2026-03-08T03:00:00Z")
+
+    @patch("calendar_connector.calendar_connector.calendar_connect")
+    def test_list_upcoming_events_uses_date_field_when_datetime_missing(self, mock_connect):
+        class _UpcomingEventsService(_FakeEventsService):
+            def list(self, **kwargs):
+                self.calls.append(kwargs)
+                return _FakeExecute(
+                    {
+                        "items": [
+                            {
+                                "id": "id-upcoming",
+                                "summary": "All day",
+                                "start": {"date": "2026-03-10"},
+                            }
+                        ]
+                    }
+                )
+
+        class _UpcomingService:
+            def __init__(self):
+                self._events = _UpcomingEventsService()
+
+            def events(self):
+                return self._events
+
+        fake_service = _UpcomingService()
+        mock_connect.return_value = fake_service
+        with patch(
+            "calendar_connector.calendar_connector.now_in_configured_timezone",
+            return_value=datetime.datetime(2026, 3, 5, 18, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+        ):
+            events = calendar_connector.list_upcoming_events(project_logger=_MockLogger(), max_results=3)
+
+        self.assertEqual(events[0]["start"], "2026-03-10")
+        call_kwargs = fake_service.events().calls[0]
+        self.assertEqual(call_kwargs["maxResults"], 3)
+        self.assertEqual(call_kwargs["timeMin"], "2026-03-05T21:00:00Z")
+
+    @patch("calendar_connector.calendar_connector.calendar_connect")
+    def test_create_calendar_event_builds_payload_and_returns_created_event(self, mock_connect):
+        fake_service = _FakeService()
+        mock_connect.return_value = fake_service
+
+        created = calendar_connector.create_calendar_event(
+            project_logger=_MockLogger(),
+            summary="Kickoff",
+            start_datetime="2026-03-06T10:00",
+            end_datetime="2026-03-06T11:00",
+            description="Alinhamento",
+            timezone="America/Sao_Paulo",
+        )
+
+        self.assertEqual(created["id"], "created-id")
+        self.assertEqual(created["summary"], "Kickoff")
+        insert_call = fake_service.events().calls[0]
+        self.assertEqual(insert_call["calendarId"], "primary")
+        self.assertEqual(insert_call["body"]["description"], "Alinhamento")
+
+    @patch("calendar_connector.calendar_connector.calendar_connect")
+    def test_create_calendar_event_rejects_invalid_range(self, mock_connect):
+        mock_connect.return_value = _FakeService()
+        with self.assertRaises(ValueError):
+            calendar_connector.create_calendar_event(
+                project_logger=_MockLogger(),
+                summary="Kickoff",
+                start_datetime="2026-03-06T11:00",
+                end_datetime="2026-03-06T10:00",
+                timezone="America/Sao_Paulo",
+            )
 
 
 if __name__ == "__main__":

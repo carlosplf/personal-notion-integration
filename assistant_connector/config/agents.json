@@ -582,6 +582,8 @@
     {
       "name": "search_contacts",
       "description": "Busca contatos em /memories/contacts.csv por nome, email, telefone ou relacionamento.",
+      "prompt_guidance": "Use search_contacts para resolver destinatários citados de forma natural (ex.: 'meu email pessoal', 'contato profissional', 'minha esposa'). Se houver um único contato claro, use o email retornado na próxima ação sem pedir confirmação extra de identificação.",
+      "guidance_priority": 15,
       "handler": "assistant_connector.tools.contacts_tools:search_contacts",
       "write_operation": false,
       "input_schema": {
@@ -749,7 +751,7 @@
     {
       "name": "send_email",
       "description": "Envia email pelo Gmail. O destinatário deve ser informado explicitamente pelo usuário e o assunto deve ser definido pela LLM.",
-      "prompt_guidance": "No uso de send_email, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional. Só envie se o destinatário tiver sido informado explicitamente pelo usuário.",
+      "prompt_guidance": "No uso de send_email, preserve fidelidade ao texto solicitado pelo usuário e não invente conteúdo adicional. O destinatário pode ser um email direto ou uma referência de contato explícita do usuário (ex.: 'meu email pessoal', 'contato profissional'). Se a identificação do contato for ambígua, peça desambiguação; se for única e clara, prossiga.",
       "guidance_priority": 20,
       "handler": "assistant_connector.tools.email_tools:send_email",
       "write_operation": true,

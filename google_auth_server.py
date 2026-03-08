@@ -31,14 +31,12 @@ SCOPES = [
 STATE_TTL_SECONDS = 600
 CALLBACK_PATH = "/auth/google/callback"
 
-_SUCCESS_HTML = (
-    b"<!DOCTYPE html>\n"
-    b"<html><head><title>Autorizado</title><meta charset=\"utf-8\"></head>\n"
-    b"<body style=\"font-family:sans-serif;text-align:center;padding:3em\">\n"
-    b"<h2>\xe2\x9c\x85 Google autorizado com sucesso!</h2>\n"
-    b"<p>Voc\xc3\xaa pode fechar esta aba e voltar ao Telegram.</p>\n"
-    b"</body></html>"
-)
+_SUCCESS_HTML = """<!DOCTYPE html>
+<html><head><title>Autorizado</title><meta charset="utf-8"></head>
+<body style="font-family:sans-serif;text-align:center;padding:3em">
+<h2>&#x2705; Google autorizado com sucesso!</h2>
+<p>Voc&ecirc; pode fechar esta aba e voltar ao Telegram.</p>
+</body></html>"""
 
 _ERROR_HTML = """<!DOCTYPE html>
 <html><head><title>Erro</title><meta charset="utf-8"></head>
@@ -46,6 +44,11 @@ _ERROR_HTML = """<!DOCTYPE html>
 <h2>\u274c Falha na autoriza\u00e7\u00e3o</h2>
 <p>{message}</p>
 </body></html>"""
+
+
+def _to_html_entities(text: str) -> str:
+    escaped = html.escape(str(text), quote=True)
+    return escaped.encode("ascii", "xmlcharrefreplace").decode("ascii")
 
 
 class GoogleOAuthCallbackServer:
@@ -118,11 +121,11 @@ class GoogleOAuthCallbackServer:
                 error_param = (params.get("error") or [""])[0]
 
                 if error_param:
-                    msg = f"Google recusou: {html.escape(error_param)}"
-                    self._respond(400, _ERROR_HTML.format(message=msg).encode())
+                    msg = _to_html_entities(f"Google recusou: {error_param}")
+                    self._respond(400, _ERROR_HTML.format(message=msg))
                     return
                 if not code or not state:
-                    self._respond(400, _ERROR_HTML.format(message="Parâmetros ausentes.").encode())
+                    self._respond(400, _ERROR_HTML.format(message=_to_html_entities("Parâmetros ausentes.")))
                     return
 
                 ok, message, user_id = server_ref._handle_callback(code, state)
@@ -134,14 +137,20 @@ class GoogleOAuthCallbackServer:
                             "✅ Google autorizado com sucesso! Já pode usar Gmail e Calendar.",
                         )
                 else:
-                    self._respond(400, _ERROR_HTML.format(message=message).encode())
+                    self._respond(400, _ERROR_HTML.format(message=_to_html_entities(message)))
 
-            def _respond(self, status: int, body: bytes, content_type: str = "text/html; charset=utf-8") -> None:
+            def _respond(
+                self,
+                status: int,
+                body: str | bytes,
+                content_type: str = "text/html; charset=utf-8",
+            ) -> None:
+                payload = body.encode("utf-8") if isinstance(body, str) else body
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
-                self.wfile.write(body)
+                self.wfile.write(payload)
 
             def log_message(self, fmt, *args):
                 server_ref._logger.debug("OAuth callback: " + fmt, *args)

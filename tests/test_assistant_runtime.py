@@ -1081,7 +1081,7 @@ class TestAssistantRuntime(unittest.TestCase):
 
         system_message = runtime._openai_client.responses.calls[0]["input"][0]["content"]
         self.assertIn("Tom de voz: amigável e direto", system_message)
-        self.assertIn("Assinatura padrão:", system_message)
+        self.assertIn("assinatura de email é aplicada automaticamente", system_message.lower())
         self.assertIn("destinatário tiver sido informado explicitamente", system_message)
 
     def test_runtime_injects_timezone_context_guidance(self):

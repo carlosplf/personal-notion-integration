@@ -18,6 +18,18 @@ from assistant_connector.tools import (
 
 
 class _FakeLogger:
+    def debug(self, *_args, **_kwargs):
+        return None
+
+    def info(self, *_args, **_kwargs):
+        return None
+
+    def warning(self, *_args, **_kwargs):
+        return None
+
+    def error(self, *_args, **_kwargs):
+        return None
+
     def exception(self, *_args, **_kwargs):
         return None
 
@@ -1031,6 +1043,22 @@ class TestAssistantTools(unittest.TestCase):
         self.assertIn("Carlos", sent_body)
 
     @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_does_not_duplicate_existing_signature_in_body(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-1"}
+        with patch.dict(os.environ, {"EMAIL_ASSISTANT_SIGNATURE": "Carlos"}, clear=False):
+            email_tools.send_email(
+                {
+                    "subject": "Atualização",
+                    "body": "Status do dia.\n\nCarlos",
+                    "recipient_email": "x@example.com",
+                },
+                _build_context(),
+            )
+
+        sent_body = mock_send_custom_email.call_args.kwargs["body_text"]
+        self.assertEqual(sent_body.count("Carlos"), 1)
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
     def test_send_email_forwards_reply_to_message_id(self, mock_send_custom_email):
         mock_send_custom_email.return_value = {"id": "msg-2", "thread_id": "thread-1"}
 
@@ -1089,6 +1117,65 @@ class TestAssistantTools(unittest.TestCase):
             _build_context(user_credential_store=credential_store),
         )
         self.assertEqual(mock_send_custom_email.call_args.kwargs["email_to"], "from-store@example.com")
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_resolves_contact_alias_to_email(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-5"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            contacts_path = os.path.join(temp_dir, "contacts.csv")
+            with open(contacts_path, "w", encoding="utf-8") as contacts_file:
+                contacts_file.write("Nome,email,telefone,relacionamento\n")
+                contacts_file.write("Contato pessoal,pessoal@example.com,16999999999,meu contato pessoal\n")
+                contacts_file.write("Contato profissional,work@example.com,16999999998,meu contato profissional\n")
+
+            email_tools.send_email(
+                {
+                    "recipient_email": "meu email pessoal",
+                    "subject": "abc",
+                    "body": "conteúdo",
+                },
+                _build_context(memories_dir=temp_dir),
+            )
+
+        self.assertEqual(mock_send_custom_email.call_args.kwargs["email_to"], "pessoal@example.com")
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_raises_when_contact_alias_is_ambiguous(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-6"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            contacts_path = os.path.join(temp_dir, "contacts.csv")
+            with open(contacts_path, "w", encoding="utf-8") as contacts_file:
+                contacts_file.write("Nome,email,telefone,relacionamento\n")
+                contacts_file.write("Casa 1,pessoal1@example.com,16999999999,meu contato pessoal\n")
+                contacts_file.write("Casa 2,pessoal2@example.com,16999999998,meu contato pessoal\n")
+
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                email_tools.send_email(
+                    {
+                        "recipient_email": "meu email pessoal",
+                        "subject": "abc",
+                        "body": "conteúdo",
+                    },
+                    _build_context(memories_dir=temp_dir),
+                )
+        mock_send_custom_email.assert_not_called()
+
+    @patch("assistant_connector.tools.email_tools.gmail_connector.send_custom_email")
+    def test_send_email_uses_personal_contact_as_default_recipient(self, mock_send_custom_email):
+        mock_send_custom_email.return_value = {"id": "msg-7"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            contacts_path = os.path.join(temp_dir, "contacts.csv")
+            with open(contacts_path, "w", encoding="utf-8") as contacts_file:
+                contacts_file.write("Nome,email,telefone,relacionamento\n")
+                contacts_file.write("Contato pessoal,pessoal@example.com,16999999999,meu contato pessoal\n")
+
+            with patch.dict(os.environ, {"EMAIL_TO": ""}, clear=False):
+                email_tools.send_email(
+                    {"subject": "abc", "body": "conteúdo"},
+                    _build_context(memories_dir=temp_dir),
+                )
+
+        self.assertEqual(mock_send_custom_email.call_args.kwargs["email_to"], "pessoal@example.com")
 
     @patch("assistant_connector.tools.email_tools.gmail_connector.search_emails")
     def test_search_emails_passes_filters(self, mock_search_emails):

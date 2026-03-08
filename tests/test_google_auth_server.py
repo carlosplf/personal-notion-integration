@@ -6,7 +6,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from google_auth_server import GoogleOAuthCallbackServer, STATE_TTL_SECONDS
+from google_auth_server import GoogleOAuthCallbackServer, STATE_TTL_SECONDS, _to_html_entities
 
 
 def _make_server(**kwargs) -> GoogleOAuthCallbackServer:
@@ -122,6 +122,20 @@ class TestHandleCallback(unittest.TestCase):
         self.assertIn("google_auth", msg.lower())
         server._store.set_credential.assert_not_called()
 
+    def test_callback_returns_error_when_fetch_token_fails(self):
+        server = _make_server()
+        flow = MagicMock()
+        flow.fetch_token.side_effect = RuntimeError("exchange failed")
+        server._pending["state-x"] = {
+            "user_id": "user-1",
+            "expires_at": time.monotonic() + STATE_TTL_SECONDS,
+            "flow": flow,
+        }
+        ok, msg, uid = server._handle_callback("authcode", "state-x")
+        self.assertFalse(ok)
+        self.assertIsNone(uid)
+        self.assertIn("Erro ao processar autorização", msg)
+
 
 class TestPurgeExpiredStates(unittest.TestCase):
     def test_purge_removes_only_expired(self):
@@ -144,6 +158,31 @@ class TestStopBeforeStart(unittest.TestCase):
         # Must not raise even if server was never started
         server.stop()
         self.assertFalse(server.is_running())
+
+
+class TestTelegramNotification(unittest.TestCase):
+    @patch("google_auth_server._http_requests.post")
+    def test_notify_telegram_sends_expected_payload(self, mock_post):
+        server = _make_server(bot_token="abc123")
+        server._notify_telegram("42", "ok")
+        mock_post.assert_called_once()
+        _, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["json"]["chat_id"], "42")
+        self.assertEqual(kwargs["json"]["text"], "ok")
+
+    @patch("google_auth_server._http_requests.post")
+    def test_notify_telegram_logs_warning_on_error(self, mock_post):
+        mock_post.side_effect = RuntimeError("network down")
+        logger = MagicMock()
+        server = _make_server(bot_token="abc123", project_logger=logger)
+        server._notify_telegram("42", "ok")
+        logger.warning.assert_called_once()
+
+
+class TestHtmlEncoding(unittest.TestCase):
+    def test_to_html_entities_converts_unicode_to_ascii_entities(self):
+        converted = _to_html_entities("Você & autorização ✅")
+        self.assertEqual(converted, "Voc&#234; &amp; autoriza&#231;&#227;o &#9989;")
 
 
 if __name__ == "__main__":
