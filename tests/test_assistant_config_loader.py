@@ -32,6 +32,7 @@ class TestAssistantConfigLoader(unittest.TestCase):
         self.assertIn("cancel_scheduled_task", agent.tools)
         self.assertIn("get_application_hardware_status", agent.tools)
         self.assertIn("list_tech_news", agent.tools)
+        self.assertIn("list_news", agent.tools)
         self.assertIn("search_emails", agent.tools)
         self.assertIn("read_email", agent.tools)
         self.assertIn("search_email_attachments", agent.tools)

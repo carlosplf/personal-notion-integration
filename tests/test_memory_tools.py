@@ -146,6 +146,18 @@ class TestEditMemoryFile(unittest.TestCase):
             with open(os.path.join(tmp, "new-file.md"), encoding="utf-8") as f:
                 self.assertEqual(f.read(), "initial content")
 
+    def test_accepts_unicode_and_spaces_in_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = memory_tools.edit_memory_file(
+                {"file_name": "preferências pessoais.md", "content": "conteúdo inicial", "mode": "replace"},
+                _build_context(memories_dir=tmp),
+            )
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["file_name"], "preferências pessoais.md")
+            with open(os.path.join(tmp, "preferências pessoais.md"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "conteúdo inicial")
+
     def test_default_mode_is_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = memory_tools.edit_memory_file(

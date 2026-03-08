@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
-import re
 
 from assistant_connector.models import ToolExecutionContext
 
-# Characters allowed in memory file names (letters, digits, hyphens, underscores, dots)
-_SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
 _RESERVED_NAMES = frozenset(["readme.md"])
+
+
+def _is_safe_filename_char(char: str) -> bool:
+    # Accept letters/digits (including unicode letters), spaces, hyphens, underscores and dots.
+    return char.isalnum() or char in {" ", "-", "_", "."}
 
 
 def _get_user_memories_dir(context: ToolExecutionContext) -> str:
@@ -32,9 +34,9 @@ def _validate_filename(file_name: str) -> str:
         raise ValueError("file_name is required")
     if not clean.endswith(".md"):
         raise ValueError("file_name must end with .md")
-    if not _SAFE_FILENAME_RE.match(clean):
+    if not all(_is_safe_filename_char(char) for char in clean):
         raise ValueError(
-            "file_name contains invalid characters — only letters, digits, hyphens, underscores, and dots are allowed"
+            "file_name contains invalid characters — only letters, digits, spaces, hyphens, underscores, and dots are allowed"
         )
     if clean.lower() in _RESERVED_NAMES:
         raise ValueError(f"'{clean}' is a reserved filename and cannot be modified")

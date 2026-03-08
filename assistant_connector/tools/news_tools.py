@@ -1,38 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from pathlib import Path
+from urllib.parse import quote_plus
 from urllib.request import urlopen
 import xml.etree.ElementTree as ET
 
 
 DEFAULT_TIMEOUT_SECONDS = 8
-SOURCES_CONFIG_PATH = Path(__file__).resolve().parents[2] / "news-sources" / "sources.json"
+DEFAULT_NEWS_QUERY = "tecnologia"
+DEFAULT_MAX_AGE_HOURS = 72
+DEFAULT_LANGUAGE = "pt-BR"
+DEFAULT_COUNTRY = "BR"
+GOOGLE_NEWS_SEARCH_RSS_URL = (
+    "https://news.google.com/rss/search?q={query}&hl={language}&gl={country}&ceid={country}:{language}"
+)
 HN_TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 HN_ITEM_URL_TEMPLATE = "https://hacker-news.firebaseio.com/v0/item/{item_id}.json"
-SOURCE_REGISTRY = {
-    "hackernews": {"kind": "hacker_news", "display_name": "Hacker News", "source_categories": ["technology"]},
-    "techcrunch": {
-        "kind": "rss",
-        "display_name": "TechCrunch",
-        "rss_url": "https://techcrunch.com/feed/",
-        "source_categories": ["technology"],
-    },
-    "wsj": {
-        "kind": "rss",
-        "display_name": "WSJ",
-        "rss_url": "https://feeds.a.dj.com/rss/RSSWSJD.xml",
-        "source_categories": ["technology"],
-    },
-    "nytimes": {
-        "kind": "rss",
-        "display_name": "NYTimes",
-        "rss_url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
-        "source_categories": ["technology"],
-    },
-}
 
 
 def list_tech_news(arguments, _context):
@@ -41,53 +27,31 @@ def list_tech_news(arguments, _context):
     except (ValueError, TypeError):
         raise ValueError("limit must be a valid integer")
     limit = min(max(limit, 1), 20)
-    config = _load_sources_config()
-    defaults = config.get("defaults", {})
-    default_categories = _normalize_categories(defaults.get("categories"))
-    cutoff_utc = _build_cutoff(defaults.get("date_filter", {}), now_utc=datetime.now(timezone.utc))
-    requested_cutoff_utc = _build_requested_cutoff(arguments)
-    if requested_cutoff_utc is not None and requested_cutoff_utc > cutoff_utc:
-        cutoff_utc = requested_cutoff_utc
-    topic = ", ".join(default_categories)
+
+    query = _normalize_query(arguments)
+    cutoff_utc = _build_requested_cutoff(arguments)
+    include_hacker_news = bool(arguments.get("include_hacker_news", False))
 
     all_items = []
     errors = []
 
-    for source in config.get("sources", []):
-        if not source.get("enabled", True):
-            continue
-        source_name, source_kind, source_url, source_supported_categories = _resolve_source_strategy(source)
-        source_categories = _normalize_categories(source.get("filters", {}).get("categories"), default_categories)
-        source_cutoff = _build_cutoff(
-            source.get("filters", {}).get("date_filter", {}),
-            fallback=cutoff_utc,
-            now_utc=datetime.now(timezone.utc),
-        )
-        try:
-            if source_kind == "hacker_news":
-                fetched_items = _fetch_hacker_news_items(cutoff_utc=source_cutoff)
-            else:
-                fetched_items = _fetch_rss_items(source_name, source_url, cutoff_utc=source_cutoff)
-            all_items.extend(
-                [
-                    item
-                    for item in fetched_items
-                    if _matches_categories(
-                        item,
-                        source_categories,
-                        source_supported_categories=source_supported_categories,
-                    )
-                ]
-            )
-        except (OSError, ValueError, ET.ParseError, json.JSONDecodeError) as exc:
-            errors.append(f"{source_name}: {exc}")
+    try:
+        all_items.extend(_fetch_google_news_items(query=query, cutoff_utc=cutoff_utc))
+    except (OSError, ValueError, ET.ParseError) as exc:
+        errors.append(f"Google News: {exc}")
 
-    selected = all_items
-    selected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-    selected = selected[:limit]
+    if include_hacker_news:
+        try:
+            all_items.extend(_fetch_hacker_news_items(query=query, cutoff_utc=cutoff_utc))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"Hacker News: {exc}")
+
+    all_items.sort(key=lambda item: item.get("published_at", ""), reverse=True)
+    selected = all_items[:limit]
 
     return {
-        "topic": topic,
+        "topic": query,
+        "query": query,
         "total_collected": len(all_items),
         "returned": len(selected),
         "news": selected,
@@ -96,92 +60,17 @@ def list_tech_news(arguments, _context):
     }
 
 
-def _load_sources_config():
-    with SOURCES_CONFIG_PATH.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, dict):
-        raise ValueError("Invalid news sources configuration format.")
-    if not isinstance(payload.get("sources"), list):
-        raise ValueError("Invalid news sources configuration: 'sources' must be a list.")
-    return payload
+def list_news(arguments, context):
+    return list_tech_news(arguments, context)
 
 
-def _resolve_source_strategy(source: dict[str, object]):
-    source_name = str(source.get("name", "")).strip()
-    source_url = str(source.get("url", "")).strip()
-    if not source_name:
-        raise ValueError("Source entry missing 'name'.")
-    if not source_url:
-        raise ValueError(f"Source '{source_name}' missing 'url'.")
-
-    normalized_name = source_name.lower()
-    registry_entry = SOURCE_REGISTRY.get(normalized_name)
-    if registry_entry:
-        kind = str(registry_entry["kind"])
-        resolved_url = str(registry_entry.get("rss_url", source_url))
-        display_name = str(registry_entry.get("display_name", source_name))
-        raw_supported_categories = registry_entry.get("source_categories", [])
-        if isinstance(raw_supported_categories, list):
-            supported_categories = [str(value).strip().lower() for value in raw_supported_categories if str(value).strip()]
-        else:
-            supported_categories = []
-        return display_name, kind, resolved_url, supported_categories
-
-    if "news.ycombinator.com" in source_url:
-        return source_name, "hacker_news", source_url, []
-    return source_name, "rss", source_url, []
+def _normalize_query(arguments: dict[str, object]) -> str:
+    raw_query = str(arguments.get("query") or arguments.get("topic") or "").strip()
+    return raw_query or DEFAULT_NEWS_QUERY
 
 
-def _normalize_categories(raw_categories, fallback=None):
-    candidate = raw_categories if raw_categories is not None else fallback
-    if candidate is None:
-        raise ValueError("At least one category must be configured in news sources.")
-    if not isinstance(candidate, list):
-        raise ValueError("News categories must be provided as a list.")
-    categories = [str(item).strip().lower() for item in candidate if str(item).strip()]
-    if not categories:
-        raise ValueError("At least one non-empty category must be configured in news sources.")
-    return categories
-
-
-def _build_cutoff(date_filter: dict[str, object], fallback: datetime | None = None, now_utc: datetime | None = None):
-    reference_now_utc = now_utc or datetime.now(timezone.utc)
-    if not date_filter:
-        if fallback is not None:
-            return fallback
-        raise ValueError("Missing date_filter configuration.")
-    mode = str(date_filter.get("mode", "")).strip().lower()
-    if mode == "recent":
-        try:
-            lookback_days = int(date_filter.get("lookback_days", 0))
-        except (ValueError, TypeError):
-            raise ValueError("date_filter.lookback_days must be a valid integer.")
-        if lookback_days <= 0:
-            raise ValueError("date_filter.lookback_days must be a positive integer.")
-        return reference_now_utc - timedelta(days=lookback_days)
-    if mode == "today":
-        return reference_now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    raise ValueError("Unsupported date_filter.mode. Use 'recent' or 'today'.")
-
-
-def _matches_categories(item: dict[str, str], categories: list[str], *, source_supported_categories: list[str]):
-    if source_supported_categories and any(category in source_supported_categories for category in categories):
-        return True
-    searchable_text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
-    normalized_aliases = {
-        "technology": ["technology", "tech"],
-    }
-    for category in categories:
-        candidate_terms = normalized_aliases.get(category, [category])
-        if any(term in searchable_text for term in candidate_terms):
-            return True
-    return False
-
-
-def _build_requested_cutoff(arguments):
-    max_age_hours = arguments.get("max_age_hours")
-    if max_age_hours is None:
-        return None
+def _build_requested_cutoff(arguments: dict[str, object]) -> datetime:
+    max_age_hours = arguments.get("max_age_hours", DEFAULT_MAX_AGE_HOURS)
     try:
         max_age_hours = int(max_age_hours)
     except (ValueError, TypeError):
@@ -190,27 +79,32 @@ def _build_requested_cutoff(arguments):
     return datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
 
-def _fetch_rss_items(source_name: str, rss_url: str, *, cutoff_utc: datetime):
+def _build_google_news_search_url(query: str) -> str:
+    encoded_query = quote_plus(query.strip())
+    return GOOGLE_NEWS_SEARCH_RSS_URL.format(
+        query=encoded_query,
+        language=DEFAULT_LANGUAGE,
+        country=DEFAULT_COUNTRY,
+    )
+
+
+def _fetch_google_news_items(*, query: str, cutoff_utc: datetime) -> list[dict[str, str]]:
+    rss_url = _build_google_news_search_url(query)
     with urlopen(rss_url, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
         payload = response.read()
-
     root = ET.fromstring(payload)
+
     items = []
-
     for item in root.findall("./channel/item"):
-        parsed_item = _parse_rss_item(item, source_name=source_name)
-        if parsed_item and _is_recent_enough(parsed_item.get("published_at"), cutoff_utc):
+        parsed_item = _parse_rss_item(item, source_name="Google News")
+        if not parsed_item:
+            continue
+        if _is_recent_enough(parsed_item.get("published_at", ""), cutoff_utc) and _matches_query(parsed_item, query):
             items.append(parsed_item)
-
-    for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
-        parsed_item = _parse_atom_entry(entry, source_name=source_name)
-        if parsed_item and _is_recent_enough(parsed_item.get("published_at"), cutoff_utc):
-            items.append(parsed_item)
-
     return items
 
 
-def _fetch_hacker_news_items(*, cutoff_utc: datetime):
+def _fetch_hacker_news_items(*, query: str, cutoff_utc: datetime) -> list[dict[str, str]]:
     with urlopen(HN_TOP_STORIES_URL, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
         top_ids = json.loads(response.read().decode("utf-8"))
 
@@ -226,61 +120,53 @@ def _fetch_hacker_news_items(*, cutoff_utc: datetime):
             continue
 
         published_at = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-        if not _is_recent_enough(published_at, cutoff_utc):
-            continue
-
-        items.append(
-            {
-                "title": title,
-                "url": url,
-                "source": "Hacker News",
-                "published_at": published_at,
-                "summary": "",
-            }
-        )
+        candidate = {
+            "title": title,
+            "url": url,
+            "source": "Hacker News",
+            "published_at": published_at,
+            "summary": "",
+        }
+        if _is_recent_enough(published_at, cutoff_utc) and _matches_query(candidate, query):
+            items.append(candidate)
     return items
 
 
-def _parse_rss_item(item: ET.Element, *, source_name: str):
+def _parse_rss_item(item: ET.Element, *, source_name: str) -> dict[str, str] | None:
     title = (item.findtext("title") or "").strip()
-    url = (item.findtext("link") or "").strip()
+    url = (item.findtext("link") or item.findtext("guid") or "").strip()
     published = (item.findtext("pubDate") or item.findtext("published") or "").strip()
     summary = (item.findtext("description") or "").strip()
+
+    source_element = item.find("source")
+    source = source_name
+    if source_element is not None:
+        raw_source = str(source_element.text or "").strip()
+        if raw_source:
+            source = raw_source
+
     if not title or not url:
         return None
 
-    published_at = _normalize_datetime(published)
     return {
         "title": title,
         "url": url,
-        "source": source_name,
-        "published_at": published_at,
+        "source": source,
+        "published_at": _normalize_datetime(published),
         "summary": summary,
     }
 
 
-def _parse_atom_entry(entry: ET.Element, *, source_name: str):
-    title = (entry.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
-    link_element = entry.find("{http://www.w3.org/2005/Atom}link")
-    url = (link_element.get("href") if link_element is not None else "") or ""
-    url = url.strip()
-    published = (
-        entry.findtext("{http://www.w3.org/2005/Atom}published")
-        or entry.findtext("{http://www.w3.org/2005/Atom}updated")
-        or ""
-    ).strip()
-    summary = (entry.findtext("{http://www.w3.org/2005/Atom}summary") or "").strip()
-    if not title or not url:
-        return None
+def _matches_query(item: dict[str, str], query: str) -> bool:
+    normalized_query = str(query or "").strip().lower()
+    if not normalized_query:
+        return True
 
-    published_at = _normalize_datetime(published)
-    return {
-        "title": title,
-        "url": url,
-        "source": source_name,
-        "published_at": published_at,
-        "summary": summary,
-    }
+    searchable_text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+    query_tokens = [token for token in re.findall(r"[a-z0-9à-ÿ]{3,}", normalized_query)]
+    if not query_tokens:
+        return True
+    return any(token in searchable_text for token in query_tokens)
 
 
 def _normalize_datetime(raw_value: str) -> str:

@@ -18,14 +18,6 @@ BLOCKED_SCHEDULED_EXECUTION_TOOLS = {
     "cancel_scheduled_task",
     "list_scheduled_tasks",
 }
-_NEGATIVE_CONFIRMATION_RE = re.compile(
-    r"\b(n[aã]o|nao|jamais|nunca)\s+(confirmo|confirmar|confirme|autorizar|autorize|enviar|mande|executar)\b"
-)
-_EXPLICIT_CONFIRMATION_RE = re.compile(
-    r"\b(confirmo|confirmar|confirmado|confirme|autorizo|autorizar|autorize|"
-    r"pode enviar|pode mandar|pode executar|pode prosseguir|"
-    r"envie|enviar|mande|mandar|executa|execute|faca|faça|prosseguir)\b"
-)
 
 
 def _load_memories_from_dir(*, memories_dir: str, agent_memory_file: str, user_memory_file: str):
@@ -149,7 +141,7 @@ class AssistantRuntime:
             input=self._build_input_messages(history, clean_message, user_memories),
             tools=openai_tools,
         )
-        write_confirmation_granted = self._has_explicit_confirmation(clean_message)
+        write_confirmation_granted = False
 
         for _ in range(max(self._agent.max_tool_rounds, 1)):
             function_calls = self._extract_function_calls(response)
@@ -173,12 +165,17 @@ class AssistantRuntime:
                     }
                 else:
                     tool_definition = self._tool_registry.get_tool_definition(tool_name)
-                    if (
-                        tool_definition.write_operation
-                        and write_confirmation_granted
-                        and "confirmed" not in arguments
-                    ):
-                        arguments = {**arguments, "confirmed": True}
+                    if tool_definition.write_operation and write_confirmation_granted:
+                        if not bool(arguments.get("confirmed", False)):
+                            arguments = {**arguments, "confirmed": True}
+                            warn_log = getattr(context.project_logger, "warning", None)
+                            if callable(warn_log):
+                                warn_log(
+                                    "Auto-injected confirmation after prior model confirmation: tool=%s session_id=%s user_id=%s",
+                                    tool_name,
+                                    context.session_id,
+                                    context.user_id,
+                                )
                     if tool_definition.write_operation and bool(arguments.get("confirmed", False)):
                         write_confirmation_granted = True
                     result = self._execute_tool_call(tool_name, arguments, context)
@@ -280,7 +277,8 @@ class AssistantRuntime:
         # Fallback: use root memories dir if no user-specific subfolder exists yet
         if os.path.isdir(self._memories_dir):
             return self._memories_dir
-        return None
+        # Keep configured path when base dir does not exist yet so write tools can create it.
+        return self._memories_dir
 
     def _resolve_user_memories(self, user_id: str) -> dict[str, str]:
         """Load memory files for the given user from their memories subfolder.
@@ -379,8 +377,17 @@ class AssistantRuntime:
         arguments: dict[str, Any],
         context: ToolExecutionContext,
     ) -> dict[str, Any]:
+        logger = getattr(context, "project_logger", None)
+        warn_log = getattr(logger, "warning", None)
         if self._is_scheduled_execution_session(context.session_id):
             if tool_name in BLOCKED_SCHEDULED_EXECUTION_TOOLS:
+                if callable(warn_log):
+                    warn_log(
+                        "Blocked scheduled-session tool call: tool=%s session_id=%s user_id=%s",
+                        tool_name,
+                        context.session_id,
+                        context.user_id,
+                    )
                 return {
                     "error": "tool_not_allowed_during_scheduled_execution",
                     "tool_name": tool_name,
@@ -391,6 +398,13 @@ class AssistantRuntime:
                 }
         tool_definition = self._tool_registry.get_tool_definition(tool_name)
         if tool_definition.write_operation and not bool(arguments.get("confirmed", False)):
+            if callable(warn_log):
+                warn_log(
+                    "Blocked write tool without confirmation: tool=%s session_id=%s user_id=%s",
+                    tool_name,
+                    context.session_id,
+                    context.user_id,
+                )
             return {
                 "error": "confirmation_required",
                 "message": (
@@ -399,9 +413,23 @@ class AssistantRuntime:
                 ),
             }
         try:
-            return self._tool_registry.execute_tool(tool_name, arguments, context)
+            result = self._tool_registry.execute_tool(tool_name, arguments, context)
+            if isinstance(result, dict) and result.get("error") and callable(warn_log):
+                warn_log(
+                    "Tool returned error payload: tool=%s error=%s session_id=%s user_id=%s",
+                    tool_name,
+                    str(result.get("error")),
+                    context.session_id,
+                    context.user_id,
+                )
+            return result
         except Exception as error:
-            context.project_logger.exception("Tool execution failed: %s", tool_name)
+            context.project_logger.exception(
+                "Tool execution failed: %s (session_id=%s user_id=%s)",
+                tool_name,
+                context.session_id,
+                context.user_id,
+            )
             return {
                 "error": "tool_execution_failed",
                 "tool_name": tool_name,
@@ -411,15 +439,6 @@ class AssistantRuntime:
     @staticmethod
     def _is_scheduled_execution_session(session_id: str) -> bool:
         return ":scheduled:" in str(session_id or "")
-
-    @staticmethod
-    def _has_explicit_confirmation(message: str) -> bool:
-        text = str(message or "").strip().lower()
-        if not text:
-            return False
-        if _NEGATIVE_CONFIRMATION_RE.search(text):
-            return False
-        return bool(_EXPLICIT_CONFIRMATION_RE.search(text))
 
     def _extract_function_calls(self, response) -> list[dict[str, str]]:
         output_items = self._item_get(response, "output", []) or []

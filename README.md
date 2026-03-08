@@ -178,7 +178,7 @@ In any message, the assistant can:
 - **Google Calendar**: list upcoming events and create new events.
 - **Gmail**: send emails (with explicit confirmation), search and read messages.
 - **Scheduled tasks**: create recurring or one-time tasks delivered via Telegram (and optionally email).
-- **Tech news**: fetch the latest news from configured RSS sources.
+- **News**: fetch recent news by topic/query (Google News RSS, with optional Hacker News).
 - **Contacts**: search contacts from `memories/contacts.csv` and register new contacts in persistent memory (`contacts.csv`).
 - **Voice messages**: voice notes are transcribed automatically (Whisper) and processed as text.
 

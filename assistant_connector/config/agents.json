@@ -534,6 +534,11 @@
             "type": "string",
             "description": "Timezone IANA, ex: America/Sao_Paulo."
           },
+          "attendees": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Lista de emails a convidar para o evento. Use sempre que o usuário mencionar convidar alguém ou adicionar participantes."
+          },
           "confirmed": {
             "type": "boolean",
             "description": "Use true apenas quando o usuário confirmar explicitamente a ação de escrita."
@@ -549,15 +554,55 @@
     },
     {
       "name": "list_tech_news",
-      "description": "Busca notícias recentes de tecnologia em fontes públicas (RSS + Hacker News).",
+      "description": "Busca notícias recentes por tema/query na web (Google News RSS, com opção de incluir Hacker News).",
       "handler": "assistant_connector.tools.news_tools:list_tech_news",
       "write_operation": false,
       "input_schema": {
         "type": "object",
         "properties": {
+          "query": {
+            "type": "string",
+            "description": "Consulta de busca (ex.: IA, economia, política internacional)."
+          },
           "topic": {
             "type": "string",
-            "description": "Tema para filtrar notícias (ex.: tecnologia, IA, segurança, startups)."
+            "description": "Alias de compatibilidade para query."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de notícias retornadas.",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "include_hacker_news": {
+            "type": "boolean",
+            "description": "Quando true, inclui itens do Hacker News."
+          },
+          "max_age_hours": {
+            "type": "integer",
+            "description": "Idade máxima das notícias em horas.",
+            "minimum": 6,
+            "maximum": 168
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_news",
+      "description": "Busca notícias recentes por tema/query na web (Google News RSS, com opção de incluir Hacker News).",
+      "handler": "assistant_connector.tools.news_tools:list_news",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Consulta de busca (ex.: IA, economia, política internacional)."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Alias de compatibilidade para query."
           },
           "limit": {
             "type": "integer",
@@ -1358,6 +1403,7 @@
         "list_calendar_events",
         "create_calendar_event",
         "list_tech_news",
+        "list_news",
         "search_contacts",
         "register_contact_memory",
         "search_emails",

@@ -192,6 +192,7 @@ def create_calendar_event(
     end_datetime,
     description=None,
     timezone="UTC",
+    attendees=None,
     user_id=None,
     credential_store=None,
 ):
@@ -205,17 +206,40 @@ def create_calendar_event(
         "summary": summary,
         "start": {"dateTime": start_rfc3339, "timeZone": timezone},
         "end": {"dateTime": end_rfc3339, "timeZone": timezone},
+        "conferenceData": {
+            "createRequest": {
+                "requestId": f"{summary}-{start_rfc3339}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
     }
     if description:
         event_body["description"] = description
+    if attendees:
+        if isinstance(attendees, str):
+            attendees = [e.strip() for e in attendees.split(",") if e.strip()]
+        event_body["attendees"] = [{"email": email} for email in attendees]
 
-    created_event = service.events().insert(calendarId="primary", body=event_body).execute()
+    send_updates = "all" if attendees else "none"
+    created_event = (
+        service.events()
+        .insert(calendarId="primary", body=event_body, conferenceDataVersion=1, sendUpdates=send_updates)
+        .execute()
+    )
+    meet_link = None
+    conference = created_event.get("conferenceData", {})
+    for ep in conference.get("entryPoints", []):
+        if ep.get("entryPointType") == "video":
+            meet_link = ep.get("uri")
+            break
+
     return {
         "id": created_event.get("id"),
         "summary": created_event.get("summary"),
         "start": created_event.get("start", {}).get("dateTime"),
         "end": created_event.get("end", {}).get("dateTime"),
         "html_link": created_event.get("htmlLink"),
+        "meet_link": meet_link,
     }
 
 

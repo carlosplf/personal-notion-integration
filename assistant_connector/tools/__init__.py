@@ -13,7 +13,7 @@ from assistant_connector.tools.metabolism_tools import (
     get_metabolism_history,
     register_metabolism_profile,
 )
-from assistant_connector.tools.news_tools import list_tech_news
+from assistant_connector.tools.news_tools import list_news, list_tech_news
 from assistant_connector.tools.notion_tools import (
     analyze_monthly_bills,
     analyze_notion_meals,
@@ -70,6 +70,7 @@ __all__ = [
     "list_available_agents",
     "list_available_tools",
     "list_tech_news",
+    "list_news",
     "calculate_metabolism_profile",
     "register_metabolism_profile",
     "get_metabolism_history",

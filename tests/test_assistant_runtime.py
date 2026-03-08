@@ -547,7 +547,58 @@ class TestAssistantRuntime(unittest.TestCase):
         self.assertEqual(answer, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
-    def test_runtime_auto_injects_confirmation_after_explicit_user_confirmation(self):
+    def test_runtime_executes_sensitive_write_tool_with_sim_confirmation(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "create_notion_task",
+                        "arguments": "{\"task_name\":\"Nova tarefa\",\"confirmed\":true}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Tarefa criada.",
+            },
+        ]
+        tool_definitions = {
+            "create_notion_task": ToolDefinition(
+                name="create_notion_task",
+                description="Cria tarefa",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["create_notion_task"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="sim",
+            )
+
+        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
+
+    def test_runtime_does_not_auto_inject_confirmation_from_user_message(self):
         global WRITE_TOOL_CALL_COUNT
         WRITE_TOOL_CALL_COUNT = 0
 
@@ -567,7 +618,7 @@ class TestAssistantRuntime(unittest.TestCase):
             {
                 "id": "resp-2",
                 "output": [],
-                "output_text": "Tarefa criada sem reconfirmar.",
+                "output_text": "Confirmação necessária.",
             },
         ]
         tool_definitions = {
@@ -595,8 +646,61 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="confirmo, pode enviar",
             )
 
-        self.assertEqual(answer, "Tarefa criada sem reconfirmar.")
-        self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
+        self.assertEqual(answer, "Confirmação necessária.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
+        self.assertIn("confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
+
+    def test_runtime_does_not_override_confirmed_false_from_user_message(self):
+        global WRITE_TOOL_CALL_COUNT
+        WRITE_TOOL_CALL_COUNT = 0
+
+        payloads = [
+            {
+                "id": "resp-1",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "dangerous_write_tool",
+                        "arguments": "{\"task_name\":\"Nova tarefa\",\"confirmed\":false}",
+                        "call_id": "call-1",
+                    }
+                ],
+                "output_text": "",
+            },
+            {
+                "id": "resp-2",
+                "output": [],
+                "output_text": "Confirmação necessária.",
+            },
+        ]
+        tool_definitions = {
+            "dangerous_write_tool": ToolDefinition(
+                name="dangerous_write_tool",
+                description="Cria dado externo",
+                input_schema={"type": "object", "properties": {"confirmed": {"type": "boolean"}}},
+                handler="tests.test_assistant_runtime:_write_tool",
+                write_operation=True,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = self._build_runtime(
+                temp_dir=temp_dir,
+                payloads=payloads,
+                tool_definitions=tool_definitions,
+                tool_names=["dangerous_write_tool"],
+            )
+            answer = runtime.process_user_message(
+                session_id="guild:channel:user",
+                user_id="user",
+                channel_id="channel",
+                guild_id="guild",
+                message="sim, pode salvar",
+            )
+
+        self.assertEqual(answer, "Confirmação necessária.")
+        self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
+        self.assertIn("confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
     def test_runtime_handles_invalid_tool_arguments_json(self):
         payloads = [
@@ -1294,6 +1398,13 @@ class TestResolveUserMemoriesDir(unittest.TestCase):
             rt = self._build_minimal_runtime(memories_dir=None, db_path=os.path.join(base, "mem.sqlite3"))
             result = rt._resolve_user_memories_dir("12345")
             self.assertIsNone(result)
+
+    def test_nonexistent_base_memories_dir_returns_configured_path(self):
+        with tempfile.TemporaryDirectory() as base:
+            missing_base = os.path.join(base, "missing-memories")
+            rt = self._build_minimal_runtime(memories_dir=missing_base, db_path=os.path.join(base, "mem.sqlite3"))
+            result = rt._resolve_user_memories_dir("12345")
+            self.assertEqual(result, missing_base)
 
 
 if __name__ == "__main__":

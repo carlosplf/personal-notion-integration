@@ -57,9 +57,8 @@ def _build_context(memories_dir=None, user_credential_store=None):
 
 
 class TestAssistantTools(unittest.TestCase):
-    @patch("assistant_connector.tools.news_tools._load_sources_config")
     @patch("assistant_connector.tools.news_tools.urlopen")
-    def test_list_tech_news_returns_configured_sources_only(self, mock_urlopen, mock_load_sources):
+    def test_list_tech_news_returns_google_news_and_hn_when_enabled(self, mock_urlopen):
         class _Response:
             def __init__(self, content):
                 self._content = content
@@ -75,17 +74,13 @@ class TestAssistantTools(unittest.TestCase):
 
         rss_payload = b"""<?xml version="1.0"?>
         <rss><channel>
-          <item><title>AI launch</title><link>https://example.com/a</link><pubDate>Mon, 01 Mar 2026 20:00:00 GMT</pubDate><description>technology</description></item>
+          <item><title>AI launch</title><link>https://example.com/a</link><pubDate>Mon, 01 Mar 2032 20:00:00 GMT</pubDate><description>startup and innovation</description><source>TechCrunch</source></item>
         </channel></rss>"""
         top_ids_payload = b"[1001]"
-        hn_item_payload = b'{"id":1001,"title":"Startup growth","url":"https://news.ycombinator.com/item?id=1001","time":1772409600}'
-        mock_load_sources.return_value = {
-            "defaults": {"categories": ["startup"], "date_filter": {"mode": "recent", "lookback_days": 3650}},
-            "sources": [
-                {"name": "techcrunch", "url": "https://techcrunch.com/", "enabled": True, "filters": {}},
-                {"name": "hackernews", "url": "https://news.ycombinator.com/", "enabled": True, "filters": {}},
-            ],
-        }
+        hn_item_payload = (
+            b'{"id":1001,"title":"AI startup raises Series A",'
+            b'"url":"https://news.ycombinator.com/item?id=1001","time":2000000000}'
+        )
         mock_urlopen.side_effect = [
             _Response(rss_payload),
             _Response(top_ids_payload),
@@ -93,17 +88,17 @@ class TestAssistantTools(unittest.TestCase):
         ]
 
         result = news_tools.list_tech_news(
-            {"topic": "startup", "limit": 3, "include_hacker_news": True, "max_age_hours": 999},
+            {"query": "startup AI", "limit": 3, "include_hacker_news": True, "max_age_hours": 999},
             _build_context(),
         )
 
-        self.assertEqual(result["returned"], 1)
+        self.assertEqual(result["returned"], 2)
+        self.assertIn("TechCrunch", result["sources"])
         self.assertTrue(any(item["source"] == "Hacker News" for item in result["news"]))
         self.assertEqual(mock_urlopen.call_count, 3)
 
-    @patch("assistant_connector.tools.news_tools._load_sources_config")
     @patch("assistant_connector.tools.news_tools.urlopen")
-    def test_list_tech_news_applies_requested_age_cutoff(self, mock_urlopen, mock_load_sources):
+    def test_list_tech_news_applies_requested_age_cutoff(self, mock_urlopen):
         class _Response:
             def __init__(self, content):
                 self._content = content
@@ -121,10 +116,6 @@ class TestAssistantTools(unittest.TestCase):
         <rss><channel>
           <item><title>Tech recap</title><link>https://example.com/old</link><pubDate>Mon, 01 Mar 2021 20:00:00 GMT</pubDate><description>technology</description></item>
         </channel></rss>"""
-        mock_load_sources.return_value = {
-            "defaults": {"categories": ["technology"], "date_filter": {"mode": "recent", "lookback_days": 3650}},
-            "sources": [{"name": "techcrunch", "url": "https://techcrunch.com/", "enabled": True, "filters": {}}],
-        }
         mock_urlopen.side_effect = [_Response(rss_payload)]
 
         result = news_tools.list_tech_news(
@@ -137,6 +128,32 @@ class TestAssistantTools(unittest.TestCase):
     def test_list_tech_news_rejects_invalid_limit(self):
         with self.assertRaisesRegex(ValueError, "limit must be a valid integer"):
             news_tools.list_tech_news({"limit": "many"}, _build_context())
+
+    @patch("assistant_connector.tools.news_tools.urlopen")
+    def test_list_news_alias_uses_same_handler(self, mock_urlopen):
+        class _Response:
+            def __init__(self, content):
+                self._content = content
+
+            def read(self):
+                return self._content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        rss_payload = b"""<?xml version="1.0"?>
+        <rss><channel>
+          <item><title>Market update</title><link>https://example.com/market</link><pubDate>Mon, 01 Mar 2032 20:00:00 GMT</pubDate><description>economia global</description></item>
+        </channel></rss>"""
+        mock_urlopen.side_effect = [_Response(rss_payload)]
+
+        result = news_tools.list_news({"query": "economia"}, _build_context())
+
+        self.assertEqual(result["returned"], 1)
+        self.assertEqual(result["query"], "economia")
 
     @patch("assistant_connector.tools.notion_tools.notion_connector.collect_tasks_from_control_panel")
     def test_list_notion_tasks_clamps_inputs(self, mock_collect_tasks):
