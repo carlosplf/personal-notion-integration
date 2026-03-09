@@ -9,6 +9,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from assistant_connector import app_health, create_assistant_service
+from assistant_connector.models import ChatResponse
 from assistant_connector.scheduler import AssistantScheduledTaskRunner
 from gmail_connector import gmail_connector
 from openai_connector import llm_api
@@ -186,6 +187,29 @@ def _ensure_markdown_response(text):
 
 def build_bot_response(answer):
     return _ensure_markdown_response(answer)
+
+
+async def _send_chat_response(reply_to_message, chat_response: ChatResponse) -> None:
+    """Send a ChatResponse to the user: text first, then any chart images.
+
+    Args:
+        reply_to_message: A Telegram Message object whose reply_* methods will be used.
+        chat_response: The structured response from AssistantService.
+    """
+    await _send_formatted_response(
+        reply_to_message.reply_text,
+        build_bot_response(chat_response.text),
+    )
+    for image_path in chat_response.image_paths:
+        try:
+            with open(image_path, "rb") as img_file:
+                await reply_to_message.reply_photo(photo=img_file)
+        except Exception as exc:  # noqa: BLE001
+            # Log and skip — a failed chart delivery must not break the whole response
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to deliver chart image %s: %s", image_path, exc
+            )
 
 
 def build_new_chat_response():
@@ -390,9 +414,7 @@ def create_telegram_application(project_logger=None):
                 chat_id=update.effective_chat.id,
                 input_text=input_text,
             )
-            await _send_formatted_response(
-                update.effective_message.reply_text, build_bot_response(answer)
-            )
+            await _send_chat_response(update.effective_message, answer)
         except Exception as error:
             logger.exception("Error running assistant chat")
             await update.effective_message.reply_text(build_error_response(error))
@@ -444,7 +466,7 @@ def create_telegram_application(project_logger=None):
                 chat_id=update.effective_chat.id,
                 input_text=input_text,
             )
-            await _send_formatted_response(message.reply_text, build_bot_response(answer))
+            await _send_chat_response(message, answer)
         except Exception as error:
             logger.exception("Error running assistant chat for audio input")
             await message.reply_text(build_error_response(error))
@@ -490,7 +512,7 @@ def create_telegram_application(project_logger=None):
                 mime_type=mime_type,
                 caption=caption,
             )
-            await _send_formatted_response(message.reply_text, build_bot_response(answer))
+            await _send_chat_response(message, answer)
         except Exception as error:
             logger.exception("Error handling document upload")
             await message.reply_text(build_error_response(error))
@@ -538,9 +560,7 @@ def create_telegram_application(project_logger=None):
                 chat_id=update.effective_chat.id,
                 input_text=trigger,
             )
-            await _send_formatted_response(
-                update.effective_message.reply_text, build_bot_response(answer)
-            )
+            await _send_chat_response(update.effective_message, answer)
         except Exception as error:
             logger.exception("Error running /setup command")
             await update.effective_message.reply_text(build_error_response(error))

@@ -8,7 +8,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from assistant_connector.memory_store import ConversationMemoryStore
-from assistant_connector.models import AgentDefinition, ToolExecutionContext
+from assistant_connector.models import AgentDefinition, ChatResponse, ResponseAttachments, ToolExecutionContext
 from assistant_connector.tool_registry import ToolRegistry
 from utils.timezone_utils import build_time_context
 
@@ -109,7 +109,7 @@ class AssistantRuntime:
         channel_id: str,
         guild_id: str | None,
         message: str,
-    ) -> str:
+    ) -> ChatResponse:
         clean_message = str(message).strip()
         if not clean_message:
             raise ValueError("User message cannot be empty")
@@ -125,6 +125,7 @@ class AssistantRuntime:
 
         available_tools = self._tool_registry.describe_tools(self._agent.tools)
         user_memories_dir = self._resolve_user_memories_dir(user_id)
+        response_attachments = ResponseAttachments()
         context = ToolExecutionContext(
             session_id=session_id,
             user_id=user_id,
@@ -137,6 +138,7 @@ class AssistantRuntime:
             user_credential_store=self._user_credential_store,
             memories_dir=user_memories_dir,
             file_store=self._file_store,
+            response_attachments=response_attachments,
         )
         openai_tools = self._tool_registry.get_openai_tools(self._agent.tools)
         response = self._openai_client.responses.create(
@@ -151,7 +153,10 @@ class AssistantRuntime:
             if not function_calls:
                 final_text = self._extract_text_response(response)
                 self._memory_store.append_message(session_id, "assistant", final_text)
-                return final_text
+                return ChatResponse(
+                    text=final_text,
+                    image_paths=list(response_attachments.images),
+                )
 
             tool_outputs = []
             for function_call in function_calls:
@@ -213,7 +218,10 @@ class AssistantRuntime:
             "Tente reformular ou dividir em passos menores."
         )
         self._memory_store.append_message(session_id, "assistant", fallback_message)
-        return fallback_message
+        return ChatResponse(
+            text=fallback_message,
+            image_paths=list(response_attachments.images),
+        )
 
     def reset_session(self, *, session_id: str) -> None:
         self._memory_store.clear_session(session_id)

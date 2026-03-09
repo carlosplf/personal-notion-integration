@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from assistant_connector.config_loader import load_assistant_configuration
 from assistant_connector.file_store import FileStore, ACCEPTED_EXTENSIONS, ACCEPTED_EXTENSIONS_DISPLAY
 from assistant_connector.memory_store import ConversationMemoryStore
+from assistant_connector.models import ChatResponse
 from assistant_connector.runtime import AssistantRuntime, _load_memories_from_dir
 from assistant_connector.tool_registry import ToolRegistry
 
@@ -25,7 +26,7 @@ class AssistantService:
         channel_id: str,
         guild_id: str | None,
         message: str,
-    ) -> str:
+    ) -> ChatResponse:
         session_id = self.build_session_id(
             user_id=user_id,
             channel_id=channel_id,
@@ -63,23 +64,25 @@ class AssistantService:
         file_bytes: bytes,
         mime_type: str = "",
         caption: str = "",
-    ) -> str:
+    ) -> ChatResponse:
         """
         Validate and store an uploaded file, then notify the assistant so it can
         acknowledge the upload in context.
 
-        Returns the assistant's response text, or an error message if the format
+        Returns the assistant's ChatResponse, or an error ChatResponse if the format
         is not accepted.
         """
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ACCEPTED_EXTENSIONS:
-            return (
-                f"❌ O formato *{ext or 'desconhecido'}* não é aceito pelo sistema.\n"
-                f"Formatos suportados: {ACCEPTED_EXTENSIONS_DISPLAY}"
+            return ChatResponse(
+                text=(
+                    f"❌ O formato *{ext or 'desconhecido'}* não é aceito pelo sistema.\n"
+                    f"Formatos suportados: {ACCEPTED_EXTENSIONS_DISPLAY}"
+                )
             )
 
         if self._file_store is None:
-            return "❌ O gerenciamento de arquivos não está configurado neste ambiente."
+            return ChatResponse(text="❌ O gerenciamento de arquivos não está configurado neste ambiente.")
 
         try:
             record = self._file_store.save_file(
@@ -90,7 +93,7 @@ class AssistantService:
                 context_description=caption,
             )
         except ValueError as exc:
-            return f"❌ {exc}"
+            return ChatResponse(text=f"❌ {exc}")
 
         context_note = f" Contexto informado: \"{caption}\"." if caption.strip() else ""
         notification = (
@@ -177,13 +180,14 @@ class AssistantService:
             guild_id=str(task["guild_id"]) if task["guild_id"] else None,
         )
         try:
-            response_text = self._runtime.process_user_message(
+            chat_response = self._runtime.process_user_message(
                 session_id=scheduled_session_id,
                 user_id=str(task["user_id"]),
                 channel_id=str(task["channel_id"]),
                 guild_id=str(task["guild_id"]) if task["guild_id"] else None,
                 message=_build_scheduled_execution_message(str(task["message"])),
             )
+            response_text = chat_response.text
         except Exception as error:
             attempt_count = int(task["attempt_count"])
             max_attempts = int(task["max_attempts"])

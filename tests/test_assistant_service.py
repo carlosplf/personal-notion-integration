@@ -128,7 +128,7 @@ class TestAssistantService(unittest.TestCase):
                     message="oi",
                 )
 
-                self.assertEqual(answer, "Olá")
+                self.assertEqual(answer.text, "Olá")
                 self.assertEqual(service._runtime._agent.model, "gpt-custom-model")
                 self.assertEqual(service._runtime._available_agents[0]["model"], "gpt-custom-model")
                 self.assertTrue(os.path.exists(memory_path))

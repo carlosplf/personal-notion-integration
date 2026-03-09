@@ -139,7 +139,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="quais tools você tem?",
             )
 
-            self.assertEqual(answer, "Aqui estão as tools disponíveis.")
+            self.assertEqual(answer.text, "Aqui estão as tools disponíveis.")
             history = runtime._memory_store.get_recent_messages("guild:channel:user", 10)
             self.assertEqual(history[0]["role"], "user")
             self.assertEqual(history[1]["role"], "assistant")
@@ -171,7 +171,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="oi",
             )
 
-        self.assertEqual(answer, "Resposta direta")
+        self.assertEqual(answer.text, "Resposta direta")
 
     def test_runtime_injects_agent_and_user_memories(self):
         payloads = [{"id": "resp-1", "output": [], "output_text": "Resposta direta"}]
@@ -283,7 +283,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="crie a tarefa agora",
             )
 
-        self.assertEqual(answer, "Confirmação necessária.")
+        self.assertEqual(answer.text, "Confirmação necessária.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
         self.assertIn("confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
@@ -335,7 +335,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="crie a tarefa com confirmação",
             )
 
-        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(answer.text, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_blocks_scheduled_task_tools_during_scheduled_execution(self):
@@ -386,7 +386,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="executar tarefa",
             )
 
-        self.assertEqual(answer, "Bloqueio aplicado.")
+        self.assertEqual(answer.text, "Bloqueio aplicado.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
         self.assertIn(
             "tool_not_allowed_during_scheduled_execution",
@@ -442,7 +442,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="envia agora",
             )
 
-        self.assertEqual(answer, "Email enviado.")
+        self.assertEqual(answer.text, "Email enviado.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_executes_sensitive_write_tool_after_clear_confirmation(self):
@@ -493,7 +493,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="pode enviar",
             )
 
-        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(answer.text, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_executes_sensitive_write_tool_with_natural_confirmation_word(self):
@@ -544,7 +544,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="confirmar",
             )
 
-        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(answer.text, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_executes_sensitive_write_tool_with_sim_confirmation(self):
@@ -595,7 +595,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="sim",
             )
 
-        self.assertEqual(answer, "Tarefa criada.")
+        self.assertEqual(answer.text, "Tarefa criada.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 1)
 
     def test_runtime_does_not_auto_inject_confirmation_from_user_message(self):
@@ -646,7 +646,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="confirmo, pode enviar",
             )
 
-        self.assertEqual(answer, "Confirmação necessária.")
+        self.assertEqual(answer.text, "Confirmação necessária.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
         self.assertIn("confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
@@ -698,7 +698,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="sim, pode salvar",
             )
 
-        self.assertEqual(answer, "Confirmação necessária.")
+        self.assertEqual(answer.text, "Confirmação necessária.")
         self.assertEqual(WRITE_TOOL_CALL_COUNT, 0)
         self.assertIn("confirmation_required", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
@@ -747,7 +747,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="teste",
             )
 
-            self.assertEqual(answer, "Argumento inválido tratado.")
+            self.assertEqual(answer.text, "Argumento inválido tratado.")
             self.assertIn("invalid_tool_arguments", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
             with sqlite3.connect(runtime._memory_store.db_path) as connection:
@@ -801,7 +801,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="teste",
             )
 
-        self.assertEqual(answer, "Erro tratado.")
+        self.assertEqual(answer.text, "Erro tratado.")
         self.assertIn("tool_execution_failed", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
     def test_runtime_reports_non_dict_tool_response(self):
@@ -849,7 +849,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="teste",
             )
 
-        self.assertEqual(answer, "Erro tratado.")
+        self.assertEqual(answer.text, "Erro tratado.")
         self.assertIn("tool_execution_failed", runtime._openai_client.responses.calls[1]["input"][0]["output"])
 
     def test_runtime_uses_content_text_when_output_text_missing(self):
@@ -890,7 +890,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="oi",
             )
 
-        self.assertEqual(answer, "Resposta via content")
+        self.assertEqual(answer.text, "Resposta via content")
 
     def test_runtime_uses_placeholder_call_id_when_missing(self):
         payloads = [
@@ -993,7 +993,7 @@ class TestAssistantRuntime(unittest.TestCase):
                 message="oi",
             )
 
-        self.assertIn("Não consegui concluir", answer)
+        self.assertIn("Não consegui concluir", answer.text)
 
     def test_runtime_respects_memory_window(self):
         payloads = [{"id": "resp-1", "output": [], "output_text": "ok"}]

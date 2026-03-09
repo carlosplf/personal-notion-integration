@@ -6,6 +6,7 @@ from unittest import mock
 from datetime import datetime, timezone
 
 from assistant_connector.memory_store import ConversationMemoryStore
+from assistant_connector.models import ChatResponse
 from assistant_connector.scheduler import AssistantScheduledTaskRunner
 from assistant_connector.service import AssistantService
 
@@ -25,7 +26,7 @@ class _FakeRuntime:
         self.calls.append(kwargs)
         if self._should_fail:
             raise RuntimeError("planned failure")
-        return "scheduled-ok"
+        return ChatResponse(text="scheduled-ok")
 
     def reset_session(self, **_kwargs):
         return None

@@ -1446,6 +1446,69 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "generate_nutrition_chart",
+      "description": "Gera um gráfico visual (PNG) com o resumo de nutrição e/ou exercícios do usuário e envia automaticamente para o Telegram junto com a resposta de texto. Use após coletar os dados de refeições (analyze_notion_meals) e/ou exercícios (analyze_notion_exercises). Informe as metas salvas nas memórias do usuário quando disponíveis.",
+      "handler": "assistant_connector.tools.chart_tools:generate_nutrition_chart",
+      "write_operation": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Título do gráfico, ex: 'Nutrição — 09/03/2026'."
+          },
+          "calories_consumed": {
+            "type": "number",
+            "description": "Total de calorias consumidas (kcal).",
+            "minimum": 0
+          },
+          "calories_goal": {
+            "type": "number",
+            "description": "Meta diária de calorias (kcal). Use o valor das memórias do usuário se disponível.",
+            "minimum": 0
+          },
+          "protein_g": {
+            "type": "number",
+            "description": "Proteínas consumidas em gramas.",
+            "minimum": 0
+          },
+          "protein_goal_g": {
+            "type": "number",
+            "description": "Meta diária de proteínas em gramas.",
+            "minimum": 0
+          },
+          "carbs_g": {
+            "type": "number",
+            "description": "Carboidratos consumidos em gramas.",
+            "minimum": 0
+          },
+          "carbs_goal_g": {
+            "type": "number",
+            "description": "Meta diária de carboidratos em gramas.",
+            "minimum": 0
+          },
+          "fat_g": {
+            "type": "number",
+            "description": "Gordura consumida em gramas.",
+            "minimum": 0
+          },
+          "fat_goal_g": {
+            "type": "number",
+            "description": "Meta diária de gordura em gramas.",
+            "minimum": 0
+          },
+          "calories_burned": {
+            "type": "number",
+            "description": "Calorias gastas em exercícios no dia.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "prompt_guidance": "Gere o gráfico somente quando o usuário pedir explicitamente uma visualização, gráfico ou chart. Para consultas simples de texto (ex.: 'o que eu comi hoje?', 'quantas calorias?'), responda em texto sem chamar esta tool.",
+      "guidance_priority": 90
     }
   ],
   "agents": [
@@ -1499,7 +1562,8 @@
         "edit_memory_file",
         "list_user_files",
         "read_file_content",
-        "delete_user_file"
+        "delete_user_file",
+        "generate_nutrition_chart"
       ]
     }
   ]
