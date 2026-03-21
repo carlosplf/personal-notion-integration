@@ -920,7 +920,7 @@
     {
       "name": "register_notion_meal",
       "description": "Registra alimento consumido no Notion Meals usando calorias estimadas pela LLM e quantidade na unidade informada pelo usuário.",
-      "prompt_guidance": "Ao registrar refeição, use categorias exatamente entre ALMOÇO, JANTAR, LANCHE e CAFÉ DA MANHÃ. Informe a quantidade na unidade original do usuário (ex.: '250 ml', '2 unidades', '150 g'). Calorias estimadas devem ser informadas. Se não houver confiança para estimar calorias, peça confirmação ao usuário em vez de registrar dados parciais.",
+      "prompt_guidance": "Ao registrar refeição, use categorias exatamente entre ALMOÇO, JANTAR, LANCHE, CAFÉ DA MANHÃ e SUPLEMENTO. Use SUPLEMENTO para proteínas em pó, creatina, vitaminas, pré-treinos e similares. Informe a quantidade na unidade original do usuário (ex.: '250 ml', '2 unidades', '150 g'). Calorias estimadas devem ser informadas. Se não houver confiança para estimar calorias, peça confirmação ao usuário em vez de registrar dados parciais.",
       "guidance_priority": 30,
       "handler": "assistant_connector.tools.notion_tools:register_notion_meal",
       "write_operation": true,
@@ -938,7 +938,8 @@
               "ALMOÇO",
               "JANTAR",
               "LANCHE",
-              "CAFÉ DA MANHÃ"
+              "CAFÉ DA MANHÃ",
+              "SUPLEMENTO"
             ]
           },
           "quantidade": {
@@ -1507,7 +1508,7 @@
         },
         "additionalProperties": false
       },
-      "prompt_guidance": "Gere o gráfico somente quando o usuário pedir explicitamente uma visualização, gráfico ou chart. Para consultas simples de texto (ex.: 'o que eu comi hoje?', 'quantas calorias?'), responda em texto sem chamar esta tool.",
+      "prompt_guidance": "Gere o gráfico somente quando o usuário pedir explicitamente uma visualização, gráfico ou chart. Para consultas simples de texto (ex.: 'o que eu comi hoje?', 'quantas calorias?'), responda em texto sem chamar esta tool. Por padrão, para gráficos de nutrição, inclua apenas calories_consumed, calories_goal, protein_g e protein_goal_g (mais calories_burned se disponível). Somente inclua carbs_g, carbs_goal_g, fat_g ou fat_goal_g se o usuário pedir explicitamente essas métricas.",
       "guidance_priority": 90
     }
   ],

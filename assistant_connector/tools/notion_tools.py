@@ -28,7 +28,7 @@ _CATEGORY_ALIASES = {
 }
 _SUGGESTION_SUGAR_KEYWORDS = ("refrigerante", "suco", "bolo", "doce", "chocolate", "sorvete")
 _SUGGESTION_VEGETABLE_KEYWORDS = ("salada", "alface", "brocolis", "brócolis", "legume", "verdura")
-_ALLOWED_MEAL_CATEGORIES = ("ALMOÇO", "JANTAR", "LANCHE", "CAFÉ DA MANHÃ")
+_ALLOWED_MEAL_CATEGORIES = ("ALMOÇO", "JANTAR", "LANCHE", "CAFÉ DA MANHÃ", "SUPLEMENTO")
 _MEAL_CATEGORY_ALIASES = {
     "almoco": "ALMOÇO",
     "almoço": "ALMOÇO",
@@ -40,6 +40,10 @@ _MEAL_CATEGORY_ALIASES = {
     "café da manha": "CAFÉ DA MANHÃ",
     "cafe": "CAFÉ DA MANHÃ",
     "breakfast": "CAFÉ DA MANHÃ",
+    "suplemento": "SUPLEMENTO",
+    "suplementos": "SUPLEMENTO",
+    "supplement": "SUPLEMENTO",
+    "supplements": "SUPLEMENTO",
 }
 
 

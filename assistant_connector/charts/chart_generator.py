@@ -74,6 +74,7 @@ def generate_nutrition_chart(
     matplotlib.use("Agg")  # Non-interactive backend — safe for server environments
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    from matplotlib.lines import Line2D
 
     has_calories = calories_consumed is not None
     has_macros = any(v is not None for v in (protein_g, carbs_g, fat_g))
@@ -90,10 +91,10 @@ def generate_nutrition_chart(
 
     panel_idx = 0
     _CONSUMED_COLOR = "#4C9BE8"
-    _GOAL_COLOR = "#E0E0E0"
     _OVER_COLOR = "#E85454"
     _BURNED_COLOR = "#66BB6A"
-    _MACRO_COLORS = {"protein": "#AB47BC", "carbs": "#FFA726", "fat": "#EF5350"}
+    _GOAL_LINE_COLOR = "#E85454"
+    _MACRO_COLORS = {"protein": "#66BB6A", "carbs": "#4C9BE8", "fat": "#EF5350"}
 
     # --- Calorie panel ---
     if has_calories:
@@ -106,11 +107,6 @@ def generate_nutrition_chart(
         bar_labels = ["Consumidas"]
         bar_values = [consumed]
         bar_colors = [_CONSUMED_COLOR if goal == 0 or consumed <= goal else _OVER_COLOR]
-
-        if goal > 0:
-            bar_labels.append("Meta")
-            bar_values.append(goal)
-            bar_colors.append(_GOAL_COLOR)
 
         if burned > 0:
             bar_labels.append("Gastas (exerc.)")
@@ -130,6 +126,16 @@ def generate_nutrition_chart(
                     fontsize=9,
                     fontweight="bold",
                 )
+
+        # Goal as a horizontal reference line instead of a bar
+        if goal > 0:
+            ax.axhline(y=goal, color=_GOAL_LINE_COLOR, linestyle="--", linewidth=1.5,
+                       alpha=0.85, zorder=3)
+            ax.legend(
+                handles=[Line2D([0], [0], color=_GOAL_LINE_COLOR, linestyle="--",
+                                linewidth=1.5, label=f"Meta: {goal:.0f} kcal")],
+                fontsize=8,
+            )
 
         if goal > 0 and consumed > goal:
             ax.text(
@@ -153,7 +159,7 @@ def generate_nutrition_chart(
         ax.set_ylabel("kcal")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.set_ylim(0, max(bar_values) * 1.18 if bar_values else 10)
+        ax.set_ylim(0, max(bar_values + [goal]) * 1.18 if (bar_values or goal) else 10)
 
     # --- Macronutrient bars panel ---
     if has_macros:
@@ -172,17 +178,26 @@ def generate_nutrition_chart(
         goals = [_clamp(m[2]) for m in macros]
         colors = [m[3] for m in macros]
 
-        x = range(len(labels))
-        bar_width = 0.35
+        x = list(range(len(labels)))
+        bar_width = 0.5  # wider since goals are shown as lines, not side-by-side bars
         bars_consumed = ax.bar(
-            [i - bar_width / 2 for i in x], values, bar_width,
+            x, values, bar_width,
             color=colors, alpha=0.85, edgecolor="white", label="Consumido"
         )
-        if any(g > 0 for g in goals):
-            ax.bar(
-                [i + bar_width / 2 for i in x], goals, bar_width,
-                color=_GOAL_COLOR, edgecolor="silver", label="Meta"
-            )
+
+        # Goal as horizontal reference lines per macro
+        has_any_goal = any(g > 0 for g in goals)
+        for i, g in enumerate(goals):
+            if g > 0:
+                ax.hlines(
+                    y=g,
+                    xmin=i - bar_width / 2 - 0.05,
+                    xmax=i + bar_width / 2 + 0.05,
+                    colors=_GOAL_LINE_COLOR,
+                    linestyles="--",
+                    linewidth=1.5,
+                    alpha=0.85,
+                )
 
         for bar, val in zip(bars_consumed, values):
             if val > 0:
@@ -193,11 +208,17 @@ def generate_nutrition_chart(
                     ha="center", va="bottom", fontsize=8.5, fontweight="bold",
                 )
 
-        ax.set_xticks(list(x))
+        if has_any_goal:
+            ax.legend(
+                handles=[Line2D([0], [0], color=_GOAL_LINE_COLOR, linestyle="--",
+                                linewidth=1.5, label="Meta")],
+                fontsize=8,
+            )
+
+        ax.set_xticks(x)
         ax.set_xticklabels(labels, fontsize=9)
         ax.set_title("Macronutrientes", fontweight="bold", fontsize=11)
         ax.set_ylabel("gramas (g)")
-        ax.legend(fontsize=8)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         ax.set_ylim(0, max(values + goals) * 1.20 if (values + goals) else 10)
